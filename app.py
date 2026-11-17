@@ -340,8 +340,92 @@ def submit_lesson():
         </div>
     </body></html>
     """
+# ==================== الميزة الثالثة: لوحة تحكم الأستاذ التفاعلية ====================
 
+@app.route('/teacher/dashboard-view')
+def teacher_dashboard_view():
+    if session.get('role') != 'teacher':
+        return redirect(url_for('home'))
+        
+    return """
+    <html lang="ar" dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>لوحة تحكم الأستاذ - منصة تسيير المؤسسة</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>body { font-family: 'Cairo', sans-serif; }</style>
+    </head>
+    <body class="bg-slate-100 min-h-screen p-6">
+        <div class="max-w-4xl mx-auto space-y-6">
+            <!-- رأس الصفحة -->
+            <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-blue-600">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-800">البوابة البيداغوجية - الأستاذ</h1>
+                    <p class="text-sm text-gray-500 mt-1">مرحباً بك، تسيير الحصص والغيابات ودفتر النصوص</p>
+                </div>
+                <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-red-100 transition">تسجيل الخروج</a>
+            </div>
 
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- نموذج تسجيل الغيابات -->
+                <div class="bg-white rounded-2xl shadow-md p-6">
+                    <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                        <span class="w-3 h-3 bg-emerald-500 rounded-full"></span> ورقة الغيابات الرقمية
+                    </h2>
+                    <form action="/teacher/submit-attendance" method="POST" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">اسم التلميذ المعني بالغياب</label>
+                            <input type="text" name="student_name" placeholder="مثال: محمد امين" required class="w-full px-3 py-2 rounded-lg border text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">القسم / الفوج التربوي</label>
+                            <input type="text" name="section_name" placeholder="مثال: 2 آداب وفلسفة 1" required class="w-full px-3 py-2 rounded-lg border text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">تاريخ الحصة</label>
+                            <input type="date" name="date" required class="w-full px-3 py-2 rounded-lg border text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+                        </div>
+                        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg text-sm transition">
+                            إرسال ورقة الغيابات للاستشارة
+                        </button>
+                    </form>
+                </div>
+
+                <!-- نموذج تسجيل دفتر النصوص -->
+                <div class="bg-white rounded-2xl shadow-md p-6">
+                    <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                        <span class="w-3 h-3 bg-indigo-500 rounded-full"></span> دفتر النصوص الرقمي
+                    </h2>
+                    <form action="/teacher/submit-lesson" method="POST" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">القسم / الفوج التربوي</label>
+                            <input type="text" name="section_name" placeholder="مثال: 2 آداب وفلسفة 1" required class="w-full px-3 py-2 rounded-lg border text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">عنوان الدرس</label>
+                            <input type="text" name="lesson_title" placeholder="مثال: الشعور بالأنا والغير" required class="w-full px-3 py-2 rounded-lg border text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">محتوى الدرس الملخص</label>
+                            <input type="text" name="content" placeholder="إطروحات الخصوم، التركيب..." required class="w-full px-3 py-2 rounded-lg border text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">تاريخ إنجاز الدرس</label>
+                            <input type="date" name="date" required class="w-full px-3 py-2 rounded-lg border text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                        </div>
+                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-sm transition">
+                            تسجيل في دفتر النصوص
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
