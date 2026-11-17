@@ -14,9 +14,10 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'database.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# تعريف الكائن db أولاً وقبل أي جدول
 db = SQLAlchemy(app)
 
-# جدول المستخدمين والأدوار
+# 1. جدول المستخدمين والأدوار
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -24,7 +25,7 @@ class User(db.Model):
     role = db.Column(db.String(50), nullable=False)
     fullname = db.Column(db.String(120), nullable=False)
 
-# جدول الغيابات اليومية
+# 2. جدول الغيابات اليومية
 class Attendance(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     student_name = db.Column(db.String(120), nullable=False)
@@ -33,7 +34,7 @@ class Attendance(db.Model):
     date = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), default='غائب')
 
-# جدول دفتر النصوص الرقمي
+# 3. جدول دفتر النصوص الرقمي
 class LessonLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     teacher_name = db.Column(db.String(120), nullable=False)
@@ -42,18 +43,21 @@ class LessonLog(db.Model):
     content = db.Column(db.Text, nullable=False)
     date = db.Column(db.String(50), nullable=False)
 
-# إنشاء الجداول تلقائياً عند أول تشغيل
+# إنشاء الجداول بحماية تامة
 with app.app_context():
-    db.create_all()
-    if not User.query.first():
-        default_users = [
-            User(username='director', password='123456', role='director', fullname='السيد المدير'),
-            User(username='deputy', password='123456', role='inspector_deputy', fullname='السيد الناظر'),
-            User(username='counselor', password='123456', role='counselor', fullname='السيد مستشار التربية'),
-            User(username='teacher', password='123456', role='teacher', fullname='الأستاذ الفاضل')
-        ]
-        db.session.add_all(default_users)
-        db.session.commit()
+    try:
+        db.create_all()
+        if not User.query.first():
+            default_users = [
+                User(username='director', password='123456', role='director', fullname='السيد المدير'),
+                User(username='deputy', password='123456', role='inspector_deputy', fullname='السيد الناظر'),
+                User(username='counselor', password='123456', role='counselor', fullname='السيد مستشار التربية'),
+                User(username='teacher', password='123456', role='teacher', fullname='الأستاذ الفاضل')
+            ]
+            db.session.add_all(default_users)
+            db.session.commit()
+    except Exception as e:
+        print(f"Database error: {e}")
 
 # ==============================================================================
 # النهاية: إعداد القاعدة الأساسية وجداول النظام
@@ -88,7 +92,6 @@ def login():
     session['fullname'] = user.fullname
     session['role'] = user.role
 
-    # توجيه كل دور إلى لوحته الخاصة بوضوح
     if role == 'teacher':
         return redirect(url_for('teacher_dashboard_view'))
     elif role == 'counselor':
