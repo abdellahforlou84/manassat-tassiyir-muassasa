@@ -1,5 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for
-import os
+from flask import Flask, render_template, request
 
 app = Flask(__name__)
 app.secret_key = 'manassat_tassiyir_muassasa_secret_key_2026'
@@ -11,10 +10,8 @@ def home():
 @app.route('/login', methods=['POST'])
 def login():
     username = request.form.get('username')
-    password = request.form.get('password')
     role = request.form.get('role')
     
-    # توجيه ذكي حسب الدور التربوي المختار
     if role == 'director':
         return render_template('dashboard_director.html', username=username)
     elif role == 'inspector_deputy':
@@ -27,5 +24,4 @@ def login():
         return "الرجاء تحديد الصفة التربوية بدقة", 400
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True)
