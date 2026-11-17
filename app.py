@@ -2,7 +2,7 @@
 # البداية: استيراد المكتبات وإعداد التطبيق وقاعدة البيانات الأساسية
 # ==============================================================================
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template_string, request, redirect, url_for, flash, session
 from flask_sqlalchemy import SQLAlchemy
 import os
 
@@ -14,7 +14,6 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'database.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# تعريف الكائن db أولاً وقبل أي جدول
 db = SQLAlchemy(app)
 
 # 1. جدول المستخدمين والأدوار
@@ -65,12 +64,66 @@ with app.app_context():
 
 
 # ==============================================================================
-# البداية: مسارات المصادقة وتسجيل الدخول والخروج
+# البداية: واجهة تسجيل الدخول المدمجة (تمنع الشاشة البيضاء نهائياً)
 # ==============================================================================
+
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>منصة تسيير المؤسسة - تسجيل الدخول</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">منصة تسيير المؤسسة</h1>
+            <p class="text-sm text-gray-500 mt-2">تسجيل الدخول إلى حسابك التربوي</p>
+        </div>
+
+        <form action="/login" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
+                <input type="text" name="username" placeholder="مثال: teacher أو director" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
+
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
+                <input type="password" name="password" placeholder="123456" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
+
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية (الدور)</label>
+                <select name="role" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition bg-white">
+                    <option value="" disabled selected>-- اختر صفتك في المؤسسة --</option>
+                    <option value="director">المدير (Director)</option>
+                    <option value="inspector_deputy">الناظر (Deputy Principal)</option>
+                    <option value="counselor">مستشار التربية (Counselor)</option>
+                    <option value="teacher">أستاذ (Teacher)</option>
+                </select>
+            </div>
+
+            <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 rounded-lg shadow-lg transition duration-300">
+                دخول إلى لوحة التحكم
+            </button>
+        </form>
+
+        <div class="mt-5 p-3 bg-slate-100 rounded-lg text-xs text-slate-600 text-center">
+            <p class="font-bold mb-1 text-slate-700">حسابات التجربة السريعة (كلمة المرور: 123456):</p>
+            <span>أستاذ: <b>teacher</b> | ناظر: <b>deputy</b> | مدير: <b>director</b> | مستشار: <b>counselor</b></span>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
 @app.route('/')
 def home():
-    return render_template('auth.html')
+    return render_template_string(LOGIN_TEMPLATE)
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -81,12 +134,10 @@ def login():
     user = User.query.filter_by(username=username).first()
     
     if not user or user.password != password:
-        flash('اسم المستخدم أو كلمة المرور غير صحيحة!', 'danger')
-        return redirect(url_for('home'))
+        return render_template_string(LOGIN_TEMPLATE)
         
     if user.role != role:
-        flash('الصفة التربوية المختارة لا تتطابق مع هذا الحساب!', 'danger')
-        return redirect(url_for('home'))
+        return render_template_string(LOGIN_TEMPLATE)
 
     session['username'] = user.username
     session['fullname'] = user.fullname
@@ -114,7 +165,7 @@ def logout():
     return redirect(url_for('home'))
 
 # ==============================================================================
-# النهاية: مسارات المصادقة وتسجيل الدخول والخروج
+# النهاية: واجهة تسجيل الدخول المدمجة
 # ==============================================================================
 
 
