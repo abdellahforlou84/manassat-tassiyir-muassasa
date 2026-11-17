@@ -22,6 +22,3 @@ def login():
         return render_template('dashboard_teacher.html', username=username)
     else:
         return "الرجاء تحديد الصفة التربوية بدقة", 400
-
-if __name__ == '__main__':
-    app.run(debug=True)
