@@ -1,0 +1,16 @@
+<!-- عرض رسائل التنبيه القادمة من البايثون (Flash Messages) -->
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <div class="mb-4 space-y-2">
+      {% for category, message in messages %}
+        <div class="p-3 rounded-lg text-xs font-semibold border
+          {% if category == 'success' %} bg-emerald-50 text-emerald-800 border-emerald-300
+          {% elif category == 'danger' %} bg-red-50 text-red-800 border-red-300
+          {% elif category == 'warning' %} bg-amber-50 text-amber-800 border-amber-300
+          {% else %} bg-blue-50 text-blue-800 border-blue-300 {% endif %}">
+          {{ message }}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
