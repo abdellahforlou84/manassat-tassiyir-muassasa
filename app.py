@@ -1,24 +1,8 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, render_template, request, redirect, url_for
 import os
 
 app = Flask(__name__)
 app.secret_key = 'manassat_tassiyir_muassasa_secret_key_2026'
-# ربط قاعدة البيانات عبر متغير البيئة في Render
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-db = SQLAlchemy(app)
-
-# جدول المستخدمين وصلاحيات الأدوار (RBAC)
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password = db.Column(db.String(120), nullable=False)
-    role = db.Column(db.String(30), nullable=False) # director, inspector_deputy, counselor, teacher
-
-with app.app_context():
-    db.create_all()
 
 @app.route('/')
 def home():
