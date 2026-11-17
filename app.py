@@ -251,6 +251,50 @@ def login():
             </div>
         </body></html>
         """
+# ==================== الميزة الأولى: إدارة الغيابات اليومية ====================
+
+# إنشاء جدول الغيابات في قاعدة البيانات تلقائياً إن لمש يكن موجوداً
+class Attendance(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    student_name = db.Column(db.String(120), nullable=False)
+    section_name = db.Column(db.String(50), nullable=False)
+    teacher_name = db.Column(db.String(120), nullable=False)
+    date = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(20), default='غائب')
+
+with app.app_context():
+    db.create_all()
+
+@app.route('/teacher/submit-attendance', methods=['POST'])
+def submit_attendance():
+    if session.get('role') != 'teacher':
+        return redirect(url_for('home'))
+    
+    student_name = request.form.get('student_name')
+    section_name = request.form.get('section_name')
+    date = request.form.get('date')
+    
+    if student_name and section_name and date:
+        new_att = Attendance(
+            student_name=student_name,
+            section_name=section_name,
+            teacher_name=session.get('username', 'أستاذ'),
+            date=date,
+            status='غائب'
+        )
+        db.session.add(new_att)
+        db.session.commit()
+    
+    return """
+    <html lang="ar" dir="rtl"><head><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{font-family:'Cairo',sans-serif;}</style></head>
+    <body class="bg-gray-100 min-h-screen flex items-center justify-center p-6">
+        <div class="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center border-t-8 border-emerald-600">
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">تم إرسال ورقة الغيابات بنجاح</h1>
+            <p class="text-emerald-600 font-semibold mb-6">تم تحويل بيانات الغياب إلى مصلحة الاستشارة التربوية (الحارس العام).</p>
+            <a href="/" class="inline-block bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-slate-800">العودة للوحة التحكم</a>
+        </div>
+    </body></html>
+    """
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
