@@ -295,6 +295,53 @@ def submit_attendance():
         </div>
     </body></html>
     """
+# ==================== الميزة الثانية: دفتر النصوص الرقمي ====================
+
+# إنشاء جدول دفتر النصوص في قاعدة البيانات تلقائياً
+class LessonLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    teacher_name = db.Column(db.String(120), nullable=False)
+    section_name = db.Column(db.String(50), nullable=False)
+    lesson_title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    date = db.Column(db.String(50), nullable=False)
+
+with app.app_context():
+    db.create_all()
+
+@app.route('/teacher/submit-lesson', methods=['POST'])
+def submit_lesson():
+    if session.get('role') != 'teacher':
+        return redirect(url_for('home'))
+        
+    section_name = request.form.get('section_name')
+    lesson_title = request.form.get('lesson_title')
+    content = request.form.get('content')
+    date = request.form.get('date')
+    
+    if section_name and lesson_title and content and date:
+        new_log = LessonLog(
+            teacher_name=session.get('username', 'أستاذ'),
+            section_name=section_name,
+            lesson_title=lesson_title,
+            content=content,
+            date=date
+        )
+        db.session.add(new_log)
+        db.session.commit()
+    
+    return """
+    <html lang="ar" dir="rtl"><head><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{font-family:'Cairo',sans-serif;}</style></head>
+    <body class="bg-gray-100 min-h-screen flex items-center justify-center p-6">
+        <div class="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center border-t-8 border-indigo-600">
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">تم تسجيل الدرس بنجاح</h1>
+            <p class="text-indigo-600 font-semibold mb-6">تم حفظ محتوى الدرس في دفتر النصوص الرقمي وإرساله لمتابعة السيد الناظر.</p>
+            <a href="/" class="inline-block bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-slate-800">العودة للوحة التحكم</a>
+        </div>
+    </body></html>
+    """
+
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
