@@ -425,7 +425,86 @@ def teacher_dashboard_view():
     </body>
     </html>
     """
+# ==================== الميزة الرابعة: لوحة تحكم الحارس العام (مستشار التربية) ====================
+
+@app.route('/counselor/dashboard-view')
+def counselor_dashboard_view():
+    if session.get('role') != 'counselor':
+        return redirect(url_for('home'))
+        
+    # جلب جميع الغيابات المرسلة من الأساتذة لتتم معالجتها
+    all_attendances = Attendance.query.all()
     
+    # بناء جدول الغيابات ديناميكياً
+    rows_html = ""
+    if not all_attendances:
+        rows_html = "<tr><td colspan='5' class='text-center py-6 text-gray-400'>لا توجد غيابات مسجلة حالياً، جميع التلاميذ حاضرون.</td></tr>"
+    else:
+        for att in all_attendances:
+            rows_html += f"""
+            <tr class='border-b hover:bg-gray-50 transition'>
+                <td class='py-3 px-4 text-sm font-semibold text-gray-800'>{att.student_name}</td>
+                <td class='py-3 px-4 text-sm text-gray-600'>{att.section_name}</td>
+                <td class='py-3 px-4 text-sm text-gray-600'>{att.teacher_name}</td>
+                <td class='py-3 px-4 text-sm text-gray-600'>{att.date}</td>
+                <td class='py-3 px-4 text-sm'>
+                    <span class='bg-red-100 text-red-700 px-2.5 py-1 rounded-full text-xs font-bold'>{att.status}</span>
+                </td>
+            </tr>
+            """
+
+    return f"""
+    <html lang="ar" dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>مكتب التوجيه والمتابعة - الحارس العام</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>body {{ font-family: 'Cairo', sans-serif; }}</style>
+    </head>
+    <body class="bg-slate-100 min-h-screen p-6">
+        <div class="max-w-5xl mx-auto space-y-6">
+            <!-- رأس الصفحة -->
+            <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-amber-600">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-800">مكتب التوجيه والمتابعة - الاستشارة التربوية</h1>
+                    <p class="text-sm text-gray-500 mt-1">مرحباً بك، تسيير الانضباط والغيابات اليومية الواردة من الأقسام</p>
+                </div>
+                <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-red-100 transition">تسجيل الخروج</a>
+            </div>
+
+            <!-- جدول متابعة الغيابات الرقمية -->
+            <div class="bg-white rounded-2xl shadow-md p-6 overflow-hidden">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+                        <span class="w-3 h-3 bg-amber-500 rounded-full"></span> ورقة الغيابات الرقمية الواردة من الأساتذة
+                    </h2>
+                    <span class="text-xs bg-gray-100 text-gray-600 px-3 py-1 rounded-lg font-semibold">محدث آنياً</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-right border-collapse">
+                        <thead>
+                            <tr class="bg-gray-50 border-b text-xs font-bold text-gray-500 uppercase">
+                                <th class="py-3 px-4">التلميذ المعني</th>
+                                <th class="py-3 px-4">القسم</th>
+                                <th class="py-3 px-4">الأستاذ المرسل</th>
+                                <th class="py-3 px-4">التاريخ</th>
+                                <th class="py-3 px-4">الحالة</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows_html}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
