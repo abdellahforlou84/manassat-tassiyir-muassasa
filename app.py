@@ -1,71 +1,216 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, request, render_template, render_template_string, session, redirect, url_for
 import os
 
 app = Flask(__name__)
 app.secret_key = 'manassat_tassiyir_muassasa_secret_key_2026'
 
-# إعداد قاعدة البيانات المحلية الدائمة (SQLite)
-basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'database.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# قاعدة بيانات افتراضية في الذاكرة للتجربة الفورية
+USERS_DB = {
+    'director': {'password': '123456', 'role': 'director', 'name': 'السيد مدير المؤسسة'},
+    'deputy': {'password': '123456', 'role': 'inspector_deputy', 'name': 'السيد ناظر المؤسسة'},
+    'counselor': {'password': '123456', 'role': 'counselor', 'name': 'السيد مستشار التربية'},
+    'teacher': {'password': '123456', 'role': 'teacher', 'name': 'الأستاذ الفاضل'}
+}
 
-db = SQLAlchemy(app)
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>منصة تسيير المؤسسة - تسجيل الدخول</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">منصة تسيير المؤسسة</h1>
+            <p class="text-sm text-gray-500 mt-2">تسجيل الدخول إلى حسابك التربوي</p>
+        </div>
 
-# ==================== هندسة جداول قاعدة البيانات ====================
+        {% if error %}
+        <div class="mb-4 p-3 rounded-lg text-xs font-semibold bg-red-50 text-red-800 border border-red-300 text-center">
+            {{ error }}
+        </div>
+        {% endif %}
 
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password = db.Column(db.String(120), nullable=False)
-    role = db.Column(db.String(50), nullable=False) # director, inspector_deputy, counselor, teacher
-    fullname = db.Column(db.String(120), nullable=False)
+        {% if success %}
+        <div class="mb-4 p-3 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-300 text-center">
+            {{ success }}
+        </div>
+        {% endif %}
 
-class Section(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), nullable=False) # مثال: 1 ج م ع 1
-    level = db.Column(db.String(50), nullable=False) # مثال: الأولى ثانوي
+        <form action="/login" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
+                <input type="text" name="username" placeholder="مثال: director أو teacher" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
 
-class Student(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    fullname = db.Column(db.String(120), nullable=False)
-    section_id = db.Column(db.Integer, db.ForeignKey('section.id'), nullable=False)
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
+                <input type="password" name="password" placeholder="123456" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
 
-class Attendance(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    student_name = db.Column(db.String(120), nullable=False)
-    section_name = db.Column(db.String(50), nullable=False)
-    teacher_name = db.Column(db.String(120), nullable=False)
-    date = db.Column(db.String(50), nullable=False)
-    status = db.Column(db.String(20), default='غائب') # غائب أو مبرر
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية (الدور)</label>
+                <select name="role" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition bg-white">
+                    <option value="" disabled selected>-- اختر صفتك في المؤسسة --</option>
+                    <option value="director">المدير (Director)</option>
+                    <option value="inspector_deputy">الناظر (Deputy Principal)</option>
+                    <option value="counselor">مستشار التربية (Counselor)</option>
+                    <option value="teacher">أستاذ (Teacher)</option>
+                </select>
+            </div>
 
-class LessonLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    teacher_name = db.Column(db.String(120), nullable=False)
-    section_name = db.Column(db.String(50), nullable=False)
-    lesson_title = db.Column(db.String(200), nullable=False)
-    content = db.Column(db.Text, nullable=False)
-    date = db.Column(db.String(50), nullable=False)
+            <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 rounded-lg shadow-lg transition duration-300">
+                دخول إلى لوحة التحكم
+            </button>
+        </form>
 
-# إنشاء الجداول تلقائياً عند أول تشغيل
-with app.app_context():
-    db.create_all()
-    # إضافة حسابات افتراضية إذا كانت الجداول فارغة
-    if not User.query.first():
-        default_users = [
-            User(username='director', password='123456', role='director', fullname='السيد المدير'),
-            User(username='deputy', password='123456', role='inspector_deputy', fullname='السيد الناظر'),
-            User(username='counselor', password='123456', role='counselor', fullname='السيد مستشار التربية'),
-            User(username='teacher', password='123456', role='teacher', fullname='الأستاذ الفاضل')
-        ]
-        db.session.add_all(default_users)
-        db.session.commit()
+        <div class="mt-5 p-3 bg-slate-100 rounded-lg text-xs text-slate-600">
+            <p class="font-bold mb-1 text-slate-700">حسابات التجربة السريعة (كلمة المرور: 123456):</p>
+            <div class="grid grid-cols-2 gap-1">
+                <span>• مدير: <b>director</b></span>
+                <span>• ناظر: <b>deputy</b></span>
+                <span>• مستشار: <b>counselor</b></span>
+                <span>• أستاذ: <b>teacher</b></span>
+            </div>
+        </div>
 
-# ==================== المسارات والتحكم (Routes) ====================
+        <div class="flex justify-between items-center mt-5 text-sm">
+            <a href="/register" class="text-blue-600 hover:underline font-medium">إنشاء حساب جديد</a>
+            <a href="/forgot-password" class="text-gray-500 hover:underline">نسيت كلمة المرور؟</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+REGISTER_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>منصة تسيير المؤسسة - تسجيل حساب جديد</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">إنشاء حساب جديد</h1>
+            <p class="text-sm text-gray-500 mt-2">تسجيل عضوية جديدة وتفعيلها مباشرة</p>
+        </div>
+
+        <form action="/register-action" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الاسم واللقب</label>
+                <input type="text" name="fullname" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم (للدخول)</label>
+                <input type="text" name="username" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
+                <input type="password" name="password" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية</label>
+                <select name="role" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition bg-white">
+                    <option value="" disabled selected>-- اختر صفتك --</option>
+                    <option value="director">المدير</option>
+                    <option value="inspector_deputy">الناظر</option>
+                    <option value="counselor">مستشار التربية</option>
+                    <option value="teacher">أستاذ</option>
+                </select>
+            </div>
+            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow-lg transition duration-300">
+                إنشاء الحساب والدخول
+            </button>
+        </form>
+        <div class="text-center mt-5">
+            <a href="/" class="text-sm text-blue-600 hover:underline font-medium">العودة إلى تسجيل الدخول</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+FORGOT_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>استعادة كلمة المرور</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">استعادة كلمة المرور</h1>
+            <p class="text-sm text-gray-500 mt-2">أدخل اسم المستخدم لتعيين كلمة مرور جديدة</p>
+        </div>
+        <form action="/forgot-action" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
+                <input type="text" name="username" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور الجديدة</label>
+                <input type="password" name="new_password" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none transition">
+            </div>
+            <button type="submit" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-lg shadow-lg transition duration-300">
+                تحديث كلمة المرور
+            </button>
+        </form>
+        <div class="text-center mt-5">
+            <a href="/" class="text-sm text-blue-600 hover:underline font-medium">العودة إلى تسجيل الدخول</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
 @app.route('/')
 def home():
-    return render_template('auth.html')
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route('/register')
+def register():
+    return render_template_string(REGISTER_TEMPLATE)
+
+@app.route('/forgot-password')
+def forgot_password():
+    return render_template_string(FORGOT_TEMPLATE)
+
+@app.route('/register-action', methods=['POST'])
+def register_action():
+    fullname = request.form.get('fullname')
+    username = request.form.get('username').strip()
+    password = request.form.get('password')
+    role = request.form.get('role')
+    
+    USERS_DB[username] = {'password': password, 'role': role, 'name': fullname}
+    return render_template_string(LOGIN_TEMPLATE, success=f"تم إنشاء حساب ({username}) بنجاح! يمكنك الدخول الآن.")
+
+@app.route('/forgot-action', methods=['POST'])
+def forgot_action():
+    username = request.form.get('username').strip()
+    new_password = request.form.get('new_password')
+    
+    if username in USERS_DB:
+        USERS_DB[username]['password'] = new_password
+        return render_template_string(LOGIN_TEMPLATE, success="تم تغيير كلمة المرور بنجاح! سجل دخولك الآن.")
+    else:
+        return render_template_string(LOGIN_TEMPLATE, error="اسم المستخدم غير موجود في النظام.")
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -73,80 +218,39 @@ def login():
     password = request.form.get('password', '')
     role = request.form.get('role', '')
 
-    user = User.query.filter_by(username=username).first()
+    user = USERS_DB.get(username)
     
-    if not user or user.password != password:
-        flash('اسم المستخدم أو كلمة المرور غير صحيحة!', 'danger')
-        return redirect(url_for('home'))
+    if not user or user['password'] != password:
+        return render_template_string(LOGIN_TEMPLATE, error="اسم المستخدم أو كلمة المرور غير صحيحة!")
         
-    if user.role != role:
-        flash('الصفة التربوية المختارة لا تتطابق مع هذا الحساب!', 'danger')
-        return redirect(url_for('home'))
+    if user['role'] != role:
+        return render_template_string(LOGIN_TEMPLATE, error="الصفة التربوية المختارة لا تتطابق مع هذا الحساب!")
 
-    session['username'] = user.username
-    session['fullname'] = user.fullname
-    session['role'] = user.role
+    session['username'] = username
+    session['role'] = role
+    display_name = user['name']
 
-    # التوجيه حسب الدور
-    if role == 'director':
-        return render_template('dashboard_director.html', username=user.fullname, attendances=Attendance.query.all())
-    elif role == 'inspector_deputy':
-        return render_template('dashboard_deputy.html', username=user.fullname, logs=LessonLog.query.all())
-    elif role == 'counselor':
-        return render_template('dashboard_counselor.html', username=user.fullname, attendances=Attendance.query.all())
-    elif role == 'teacher':
-        return render_template('dashboard_teacher.html', username=user.fullname)
-    else:
-        return redirect(url_for('home'))
-
-@app.route('/teacher/submit-attendance', methods=['POST'])
-def submit_attendance():
-    if session.get('role') != 'teacher':
-        return redirect(url_for('home'))
+    # محاولة عرض القوالب الموجودة في مجلد templates، وفي حال وجود أي خلل فيها يتم عرض لوحة بديلة أنيقة تلقائياً
+    template_map = {
+        'director': 'dashboard_director.html',
+        'inspector_deputy': 'dashboard_deputy.html',
+        'counselor': 'dashboard_counselor.html',
+        'teacher': 'dashboard_teacher.html'
+    }
     
-    student_name = request.form.get('student_name')
-    section_name = request.form.get('section_name')
-    date = request.form.get('date')
-    
-    new_att = Attendance(
-        student_name=student_name,
-        section_name=section_name,
-        teacher_name=session.get('fullname'),
-        date=date,
-        status='غائب'
-    )
-    db.session.add(new_att)
-    db.session.commit()
-    flash('تم إرسال ورقة الغيابات الرقمية بنجاح إلى مصلحة الاستشارة!', 'success')
-    return redirect(url_for('login'))
-
-@app.route('/teacher/submit-lesson', methods=['POST'])
-def submit_lesson():
-    if session.get('role') != 'teacher':
-        return redirect(url_for('home'))
-        
-    section_name = request.form.get('section_name')
-    lesson_title = request.form.get('lesson_title')
-    content = request.form.get('content')
-    date = request.form.get('date')
-    
-    new_log = LessonLog(
-        teacher_name=session.get('fullname'),
-        section_name=section_name,
-        lesson_title=lesson_title,
-        content=content,
-        date=date
-    )
-    db.session.add(new_log)
-    db.session.commit()
-    flash('تم تسجيل الدرس في دفتر النصوص الرقمي بنجاح!', 'success')
-    return redirect(url_for('login'))
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    flash('تم تسجيل الخروج بنجاح.', 'info')
-    return redirect(url_for('home'))
+    try:
+        return render_template(template_map[role], username=display_name)
+    except Exception:
+        return f"""
+        <html lang="ar" dir="rtl"><head><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
+        <body class="bg-gray-100 min-h-screen flex items-center justify-center p-6">
+            <div class="bg-white rounded-2xl shadow-xl p-8 max-w-lg w-full text-center border-t-8 border-blue-600">
+                <h1 class="text-2xl font-bold text-gray-800 mb-2">أهلاً بك، {display_name}</h1>
+                <p class="text-blue-600 font-semibold mb-6">تم الدخول بنجاح بصفتك: {role}</p>
+                <a href="/" class="inline-block bg-slate-900 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-slate-800">تسجيل الخروج</a>
+            </div>
+        </body></html>
+        """
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
