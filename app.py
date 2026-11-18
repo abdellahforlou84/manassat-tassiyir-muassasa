@@ -314,8 +314,15 @@ def teacher_dashboard_view():
     students = Student.query.filter_by(teacher_username=teacher_uname).all()
     today_date = datetime.now().strftime('%Y-%m-%d')
 
-    # تعريف خيارات الأقسام الرسمية للقوائم المنسدلة
-    section_options_html = "".join([f'<option value="{sec}">{sec}</option>' for sec in OFFICIAL_SECTIONS])
+    # قائمة الأقسام الرسمية المعتمدة
+    safe_sections = [
+        "1ج م ع01", "1ج م ع02", "1ج م ع03", "1ج م ع04", "1ج م ع05",
+        "1ج م أ01", "1ج م أ02", "1ج م أ03",
+        "2أف1", "2أف2", "2ع ت1", "2ع ت2",
+        "3أف1", "3أف2", "3لغ", "3ع ت1", "3ع ت2"
+    ]
+    
+    section_options_html = "".join([f'<option value="{sec}">{sec}</option>' for sec in safe_sections])
 
     attendance_rows = ""
     for s in students:
@@ -381,7 +388,6 @@ def teacher_dashboard_view():
                         <h3 class="text-md font-bold text-gray-800 flex items-center gap-2">
                             <span class="w-2.5 h-2.5 bg-emerald-500 rounded-full"></span> القائمة الاسمية للأقسام المسندة (تسجيل الغيابات اليومية)
                         </h3>
-                        <span class="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-bold">متجدد تلقائياً</span>
                     </div>
                     <div class="overflow-x-auto max-h-96">
                         <table class="w-full text-right">
@@ -460,57 +466,6 @@ def teacher_dashboard_view():
     </body>
     </html>
     """
-
-@app.route('/teacher/add-student', methods=['POST'])
-def add_student():
-    if session.get('role') != 'teacher':
-        return redirect(url_for('home'))
-    fullname = request.form.get('student_fullname')
-    section_name = request.form.get('section_name')
-    if fullname and section_name:
-        db.session.add(Student(fullname=fullname, section_name=section_name, teacher_username=session.get('username')))
-        db.session.commit()
-    return redirect(url_for('teacher_dashboard_view'))
-
-@app.route('/teacher/delete-student/<int:sid>')
-def delete_student(sid):
-    if session.get('role') != 'teacher':
-        return redirect(url_for('home'))
-    student = Student.query.get(sid)
-    if student and student.teacher_username == session.get('username'):
-        db.session.delete(student)
-        db.session.commit()
-    return redirect(url_for('teacher_dashboard_view'))
-
-@app.route('/teacher/mark-absence', methods=['POST'])
-def mark_absence():
-    if session.get('role') != 'teacher':
-        return redirect(url_for('home'))
-    student_name = request.form.get('student_name')
-    section_name = request.form.get('section_name')
-    date = request.form.get('date')
-    
-    if student_name and section_name and date:
-        existing = Attendance.query.filter_by(student_name=student_name, date=date).first()
-        if not existing:
-            db.session.add(Attendance(student_name=student_name, section_name=section_name, teacher_name=session.get('fullname'), date=date, status='غائب'))
-            db.session.commit()
-            
-    return redirect(url_for('teacher_dashboard_view'))
-
-@app.route('/teacher/submit-lesson', methods=['POST'])
-def submit_lesson():
-    if session.get('role') != 'teacher':
-        return redirect(url_for('home'))
-    section_name = request.form.get('section_name')
-    lesson_title = request.form.get('lesson_title')
-    content = request.form.get('content')
-    date = request.form.get('date')
-    if section_name and lesson_title and content and date:
-        db.session.add(LessonLog(teacher_name=session.get('fullname'), section_name=section_name, lesson_title=lesson_title, content=content, date=date))
-        db.session.commit()
-    return redirect(url_for('teacher_dashboard_view'))
-
 # ==============================================================================
 # النهاية: لوحة تحكم الأستاذ
 # ==============================================================================
