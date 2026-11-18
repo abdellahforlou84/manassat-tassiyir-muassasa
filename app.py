@@ -518,6 +518,92 @@ def director_dashboard_view():
 # تشغيل السيرفر
 # ==============================================================================
 
+# قالب صفحة التسجيل الداعم للرسائل
+REGISTER_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إنشاء حساب جديد</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-xl font-bold text-gray-800">إنشاء حساب جديد</h1>
+            <p class="text-xs text-blue-600 font-semibold mt-1">منصة تسيير المؤسسة - ثانوية الشهيد قوديد أحمد</p>
+        </div>
+
+        {% if message %}
+        <div class="mb-4 p-3 bg-red-50 text-red-700 text-xs rounded-lg text-center font-bold border border-red-200">
+            {{ message }}
+        </div>
+        {% endif %}
+
+        <form action="/register-action" method="POST" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الاسم واللقب</label>
+                <input type="text" name="fullname" required class="w-full px-4 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
+                <input type="text" name="username" required class="w-full px-4 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
+                <input type="password" name="password" required class="w-full px-4 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية (الدور)</label>
+                <select name="role" required class="w-full px-4 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                    <option value="" disabled selected>-- اختر صفتك --</option>
+                    <option value="director">المدير</option>
+                    <option value="inspector_deputy">الناظر</option>
+                    <option value="counselor">مستشار التربية</option>
+                    <option value="teacher">أستاذ</option>
+                </select>
+            </div>
+            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-lg shadow-lg transition">تسجيل الحساب</button>
+        </form>
+        <div class="text-center mt-5">
+            <a href="/" class="text-sm text-blue-600 hover:underline font-bold">العودة لتسجيل الدخول</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/register')
+def register():
+    return render_template_string(REGISTER_TEMPLATE)
+
+@app.route('/register-action', methods=['POST'])
+def register_action():
+    fullname = request.form.get('fullname', '').strip()
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '').strip()
+    role = request.form.get('role', '').strip()
+
+    if not fullname or not username or not password or not role:
+        return render_template_string(REGISTER_TEMPLATE, message="جميع الحقول إجبارية!")
+
+    # التحقق هل اسم المستخدم مستخدم مسبقاً
+    existing_user = User.query.filter_by(username=username).first()
+    if existing_user:
+        return render_template_string(REGISTER_TEMPLATE, message="اسم المستخدم مستخدم مسبقاً، اختر اسمًا آخر.")
+
+    try:
+        new_user = User(username=username, password=password, role=role, fullname=fullname)
+        db.session.add(new_user)
+        db.session.commit()
+        return render_template_string(LOGIN_TEMPLATE, message="تم إنشاء الحساب بنجاح! يمكنك تسجيل الدخول الآن.")
+    except Exception as e:
+        db.session.rollback()
+        return render_template_string(REGISTER_TEMPLATE, message=f"حدث خطأ أثناء التسجيل: {e}")
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
