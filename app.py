@@ -630,3 +630,88 @@ if __name__ == '__main__':
 # ==============================================================================
 # النهاية: تشغيل السيرفر
 # ==============================================================================
+
+import sqlite3
+
+# الاتصال بقاعدة البيانات
+conn = sqlite3.connect('philo_school_manager.db')
+cursor = conn.cursor()
+
+# 1. جدول الأقسام
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS classes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_name TEXT NOT NULL UNIQUE
+)
+''')
+
+# 2. جدول الأساتذة
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS teachers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    teacher_name TEXT NOT NULL
+)
+''')
+
+# 3. جدول إسناد الأقسام للأساتذة (علاقة متعدد لمتعدد أو متعدد لواحد حسب النظام)
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS teacher_classes (
+    teacher_id INTEGER,
+    class_id INTEGER,
+    FOREIGN KEY (teacher_id) REFERENCES teachers (id),
+    FOREIGN KEY (class_id) REFERENCES classes (id),
+    PRIMARY KEY (teacher_id, class_id)
+)
+''')
+
+# 4. جدول التلاميذ
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS students (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_name TEXT NOT NULL,
+    class_id INTEGER,
+    FOREIGN KEY (class_id) REFERENCES classes (id)
+)
+''')
+
+conn.commit()
+
+def get_students_for_teacher(teacher_id, class_id):
+    """
+    تتحقق أولاً هل القسم مسند فعلاً للأستاذ، ثم تحضر قائمة التلاميذ التابعين له.
+    """
+    cursor.execute('''
+        SELECT s.id, s.student_name, c.class_name
+        FROM students s
+        JOIN classes c ON s.class_id = c.id
+        JOIN teacher_classes tc ON c.id = tc.class_id
+        WHERE tc.teacher_id = ? AND c.id = ?
+    ''', (teacher_id, class_id))
+    
+    results = cursor.fetchall()
+    
+    if not results:
+        return "عذراً، هذا القسم غير مسند لك أو لا توجد بيانات مسجلة."
+    
+    return results
+
+# مثال على الاستخدام:
+# لو أراد الأستاذ (رقم 1) استعراض أقسامه المُسندة إليه أولاً لاختيار أحدها:
+def get_teacher_assigned_classes(teacher_id):
+    cursor.execute('''
+        SELECT c.id, c.class_name 
+        FROM classes c
+        JOIN teacher_classes tc ON c.id = tc.class_id
+        WHERE tc.teacher_id = ?
+    ''', (teacher_id,))
+    return cursor.fetchall()
+
+    # مثال لتعبئة القائمة المنسدلة بالأقسام الخاصة حصراً بالأستاذ الحالي
+current_teacher_id = 1  # معرف الأستاذ الحالي بعد تسجيل الدخول
+assigned_classes = get_teacher_assigned_classes(current_teacher_id)
+
+print("الأقسام المسندة إليك:")
+for cls_id, cls_name in assigned_classes:
+    print(f"- [{cls_id}] {cls_name}")
+
+    
