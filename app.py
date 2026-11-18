@@ -691,3 +691,45 @@ if __name__ == '__main__':
 # ==============================================================================
 # النهاية: تشغيل السيرفر
 # ==============================================================================
+
+# ==============================================================================
+# البداية: ميزة استيراد قوائم التلاميذ عبر الملفات (Word / CSV)
+# ==============================================================================
+
+import csv
+import io
+
+@app.route('/teacher/upload-roster', methods=['POST'])
+def upload_roster():
+    if session.get('role') != 'teacher':
+        return redirect(url_for('home'))
+        
+    file = request.files.get('roster_file')
+    if not file:
+        return redirect(url_for('teacher_dashboard_view'))
+        
+    filename = file.filename.lower()
+    teacher_uname = session.get('username')
+    
+    # معالجة ملفات النصوص المجدولة أو CSV المستخرجة من المستندات
+    if filename.endswith('.csv') or filename.endswith('.txt'):
+        stream = io.TextIOWrapper(file.stream, encoding='utf-8')
+        reader = csv.reader(stream)
+        for row in reader:
+            if len(row) >= 2:
+                student_name = row[0].strip()
+                section_name = row[1].strip()
+                if student_name and section_name:
+                    # التحقق من عدم التكرار وإضافة التلميذ
+                    exists = Student.query.filter_by(fullname=student_name, section_name=section_name, teacher_username=teacher_uname).first()
+                    if not exists:
+                        db.session.add(Student(fullname=student_name, section_name=section_name, teacher_username=teacher_uname))
+        db.session.commit()
+        
+    return redirect(url_for('teacher_dashboard_view'))
+
+# ==============================================================================
+# النهاية: ميزة استيراد قوائم التلاميذ عبر الملفات
+# ==============================================================================
+
+
