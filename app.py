@@ -1,17 +1,18 @@
 # ==============================================================================
 # منصة تسيير المؤسسة - ثانوية الشهيد قوديد أحمد (سيدي الشحمي)
-# الكود المتكامل والموحد من الصفر
+# الكود المتكامل مع الاستيراد التلقائي لقوائم التلاميذ من ملف الإكسل
 # ==============================================================================
 
 from flask import Flask, render_template_string, request, redirect, url_for, flash, session, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import os
+import pandas as pd
 from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = 'manassat_tassiyir_muassasa_secret_key_2026'
 
-# إعداد قاعدة البيانات الموحدة
+# إعداد قاعدة البيانات
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'philo_school_manager.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -53,15 +54,59 @@ class LessonLog(db.Model):
 
 # القائمة الرسمية للأقسام
 OFFICIAL_SECTIONS = [
-    "1ج م ع01", "1ج م ع02", "1ج م ع03", "1ج م ع04", "1ج م ع05",
+    "1أ1", "1ج م ع01", "1ج م ع02", "1ج م ع03", "1ج م ع04", "1ج م ع05",
     "1ج م أ01", "1ج م أ02", "1ج م أ03",
-    "2أف1", "2أف2",
-    "2ع ت1", "2ع ت2",
-    "2لغ", "2ريا", "2تق", "2تر",
+    "2أف1", "2أف2", "2ع ت1", "2ع ت2", "2لغ", "2ريا", "2تق", "2تر",
     "3أف1", "3أف2", "3لغ", "3ع ت1", "3ع ت2", "3ريا", "3ت ر"
 ]
 
-# تهيئة قاعدة البيانات والحسابات الافتراضية
+EXCEL_FILE = 'قوائم التلاميذ.xlsx'
+
+def import_students_from_excel(filepath):
+    """دالة لقراءة وقص الأسماء والأقسام من ملف الإكسل وإضافتها لقاعدة البيانات"""
+    if not os.path.exists(filepath):
+        print(f"ملاحظة: ملف {filepath} غير موجود حالياً، يتم تخطي الاستيراد.")
+        return
+
+    try:
+        xls = pd.ExcelFile(filepath)
+        for sheet in xls.sheet_names:
+            df = pd.read_excel(filepath, sheet_name=sheet)
+            if df.empty:
+                continue
+            
+            current_section = "1أ1" # القسم الافتراضي من الملف المرفق
+            for idx, row in df.iterrows():
+                row_str = str(row.values[0])
+                if 'القسم:' in row_str or 'القسم' in row_str:
+                    parts = row_str.split('القسم')
+                    if len(parts) > 1:
+                        current_section = parts[-1].replace(':', '').strip()
+                
+                val_no = row.values[0]
+                try:
+                    if pd.notna(val_no) and str(val_no).strip().isdigit() and current_section:
+                        last_name = str(row.values[1]).strip() if pd.notna(row.values[1]) else ""
+                        first_name = str(row.values[2]).strip() if pd.notna(row.values[2]) else ""
+                        
+                        if last_name or first_name:
+                            full_name = f"{last_name} {first_name}".strip()
+                            existing = Student.query.filter_by(fullname=full_name, section_name=current_section).first()
+                            if not existing:
+                                db.session.add(Student(
+                                    fullname=full_name, 
+                                    section_name=current_section, 
+                                    teacher_username='system_imported'
+                                ))
+                except:
+                    pass
+            db.session.commit()
+        print("تم استيراد التلاميذ والأقسام من ملف الإكسل بنجاح!")
+    except Exception as e:
+        db.session.rollback()
+        print(f"خطأ أثناء استيراد ملف الإكسل: {e}")
+
+# تهيئة قاعدة البيانات والحسابات الافتراضية والاستيراد
 with app.app_context():
     db.create_all()
     if not User.query.first():
@@ -73,9 +118,12 @@ with app.app_context():
         ]
         db.session.add_all(default_users)
         db.session.commit()
+    
+    # استيراد التلاميذ من ملف الإكسل تلقائياً
+    import_students_from_excel(EXCEL_FILE)
 
 # ==============================================================================
-# قوالب واجهات HTML (مدمجة بالكامل لضمان الاستقرار وسهولة التشغيل)
+# قوالب واجهات HTML المدمجة
 # ==============================================================================
 
 LOGIN_TEMPLATE = """
@@ -95,13 +143,11 @@ LOGIN_TEMPLATE = """
             <h1 class="text-xl font-bold text-gray-800">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</h1>
             <p class="text-sm text-blue-600 font-semibold mt-1">منصة تسيير المؤسسة التربوية</p>
         </div>
-
         {% if message %}
         <div class="mb-4 p-3 bg-emerald-50 text-emerald-700 text-xs rounded-lg text-center font-bold border border-emerald-200">
             {{ message }}
         </div>
         {% endif %}
-
         <form action="/login" method="POST" class="space-y-4">
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
@@ -115,17 +161,16 @@ LOGIN_TEMPLATE = """
                 <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية (الدور)</label>
                 <select name="role" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none">
                     <option value="" disabled selected>-- اختر صفتك في المؤسسة --</option>
-                    <option value="director">المدير (Director)</option>
-                    <option value="inspector_deputy">الناظر (Deputy Principal)</option>
-                    <option value="counselor">مستشار التربية (Counselor)</option>
-                    <option value="teacher">أستاذ (Teacher)</option>
+                    <option value="director">المدير</option>
+                    <option value="inspector_deputy">الناظر</option>
+                    <option value="counselor">مستشار التربية</option>
+                    <option value="teacher">أستاذ</option>
                 </select>
             </div>
             <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 rounded-lg shadow-lg transition">
                 دخول إلى لوحة التحكم
             </button>
         </form>
-
         <div class="flex justify-between items-center mt-5 text-sm">
             <a href="/register" class="text-blue-600 hover:underline font-bold">إنشاء حساب جديد</a>
             <a href="/forgot-password" class="text-gray-500 hover:underline">نسيت كلمة المرور؟</a>
@@ -138,10 +183,7 @@ LOGIN_TEMPLATE = """
 REGISTER_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{font-family:'Cairo',sans-serif;}</style>
-</head>
+<head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{font-family:'Cairo',sans-serif;}</style></head>
 <body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
     <div class="bg-white/95 rounded-2xl shadow-2xl w-full max-w-md p-8">
         <h1 class="text-xl font-bold text-gray-800 text-center mb-6">إنشاء حساب جديد</h1>
@@ -170,10 +212,7 @@ REGISTER_TEMPLATE = """
 FORGOT_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{font-family:'Cairo',sans-serif;}</style>
-</head>
+<head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{font-family:'Cairo',sans-serif;}</style></head>
 <body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
     <div class="bg-white/95 rounded-2xl shadow-2xl w-full max-w-md p-8">
         <h1 class="text-xl font-bold text-gray-800 text-center mb-6">استعادة كلمة المرور</h1>
@@ -189,7 +228,7 @@ FORGOT_TEMPLATE = """
 """
 
 # ==============================================================================
-# مسارات المصادقة والتوجيه
+# المسارات (Routes)
 # ==============================================================================
 
 @app.route('/')
@@ -257,7 +296,7 @@ def logout():
     return redirect(url_for('home'))
 
 # ==============================================================================
-# لوحة تحكم الأستاذ (البوابة البيداغوجية)
+# لوحة تحكم الأستاذ
 # ==============================================================================
 
 @app.route('/teacher/dashboard-view')
@@ -266,7 +305,8 @@ def teacher_dashboard_view():
         return redirect(url_for('home'))
         
     teacher_uname = session.get('username')
-    students = Student.query.filter_by(teacher_username=teacher_uname).all()
+    # جلب التلاميذ (سواء المستوردين تلقائياً أو المضافين يدوياً)
+    students = Student.query.all() # عرض كافة التلاميذ المستوردين للأستاذ
     today_date = datetime.now().strftime('%Y-%m-%d')
 
     section_options_html = "".join([f'<option value="{sec}">{sec}</option>' for sec in OFFICIAL_SECTIONS])
@@ -284,7 +324,7 @@ def teacher_dashboard_view():
             </form>
         </td>
     </tr>
-    """ for s in students]) or "<tr><td colspan='3' class='text-center py-4 text-gray-400 text-xs'>لا توجد تلاميذ مسجلين. قم بإضافة التلاميذ أدناه.</td></tr>"
+    """ for s in students]) or "<tr><td colspan='3' class='text-center py-4 text-gray-400 text-xs'>لا توجد تلاميذ مسجلين.</td></tr>"
 
     student_manage_rows = "".join([f"""
     <tr class="border-b">
@@ -298,10 +338,7 @@ def teacher_dashboard_view():
 
     return f"""
     <html lang="ar" dir="rtl">
-    <head>
-        <meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script>
-        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style>
-    </head>
+    <head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
     <body class="bg-slate-100 min-h-screen p-4 md:p-6">
         <div class="max-w-6xl mx-auto space-y-6">
             <div class="bg-white rounded-2xl shadow-md p-6 text-center border-b-4 border-blue-800 space-y-1">
@@ -315,7 +352,7 @@ def teacher_dashboard_view():
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div class="bg-white rounded-2xl shadow-md p-5 md:col-span-2 space-y-4">
-                    <h3 class="text-md font-bold text-gray-800 border-b pb-2">القائمة الاسمية للأقسام المسندة (الغيابات اليومية)</h3>
+                    <h3 class="text-md font-bold text-gray-800 border-b pb-2">القائمة الاسمية للأقسام المستوردة (الغيابات اليومية)</h3>
                     <div class="overflow-x-auto max-h-96">
                         <table class="w-full text-right">
                             <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">التلميذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3 text-center">إجراء الغياب</th></tr></thead>
@@ -325,20 +362,16 @@ def teacher_dashboard_view():
                 </div>
 
                 <div class="bg-white rounded-2xl shadow-md p-5 md:col-span-1 space-y-4">
-                    <h3 class="text-md font-bold text-gray-800 border-b pb-2">تسجيل تلميذ بقائمة الأقسام</h3>
+                    <h3 class="text-md font-bold text-gray-800 border-b pb-2">إضافة تلميذ يدوياً</h3>
                     <form action="/teacher/add-student" method="POST" class="space-y-3">
+                        <div><input type="text" name="student_fullname" placeholder="اسم ولقب التلميذ" required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-600 mb-1">اسم ولقب التلميذ</label>
-                            <input type="text" name="student_fullname" placeholder="مثال: أمين بن علي" required class="w-full px-3 py-2 rounded-lg border text-xs">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-semibold text-gray-600 mb-1">اختر القسم</label>
                             <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white">
                                 <option value="" disabled selected>-- اختر القسم --</option>
                                 {section_options_html}
                             </select>
                         </div>
-                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs">إضافة للقائمة</button>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs">إضافة</button>
                     </form>
                     <div class="mt-4 overflow-x-auto max-h-40 border-t pt-2">
                         <table class="w-full text-right"><thead><tr class="text-[10px] text-gray-500 border-b"><th>التلميذ</th><th>القسم</th><th>حذف</th></tr></thead><tbody>{student_manage_rows}</tbody></table>
@@ -347,14 +380,9 @@ def teacher_dashboard_view():
             </div>
 
             <div class="bg-white rounded-2xl shadow-md p-6">
-                <h3 class="text-md font-bold text-gray-800 mb-3">دفتر النصوص الرقمي (تسجيل الدرس المنجز)</h3>
+                <h3 class="text-md font-bold text-gray-800 mb-3">دفتر النصوص الرقمي</h3>
                 <form action="/teacher/submit-lesson" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div>
-                        <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white">
-                            <option value="" disabled selected>-- اختر القسم --</option>
-                            {section_options_html}
-                        </select>
-                    </div>
+                    <div><select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white"><option value="" disabled selected>-- القسم --</option>{section_options_html}</select></div>
                     <div><input type="text" name="lesson_title" placeholder="عنوان الدرس..." required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
                     <div><input type="text" name="content" placeholder="الملخص..." required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
                     <div class="flex gap-2">
@@ -382,7 +410,7 @@ def add_student():
 def delete_student(sid):
     if session.get('role') != 'teacher': return redirect(url_for('home'))
     student = Student.query.get(sid)
-    if student and student.teacher_username == session.get('username'):
+    if student:
         db.session.delete(student)
         db.session.commit()
     return redirect(url_for('teacher_dashboard_view'))
@@ -412,7 +440,7 @@ def submit_lesson():
     return redirect(url_for('teacher_dashboard_view'))
 
 # ==============================================================================
-# لوحات تحكم الإدارة (مستشار التربية، الناظر، المدير)
+# لوحات الإدارة الأخرى
 # ==============================================================================
 
 @app.route('/counselor/dashboard-view')
@@ -429,7 +457,7 @@ def counselor_dashboard_view():
                 <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
             </div>
             <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">ورقة الغيابات اليومية الواردة من الأساتذة</h2>
+                <h2 class="text-md font-bold text-gray-800 mb-4">ورقة الغيابات اليومية</h2>
                 <table class="w-full text-right">
                     <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-3 px-4">التلميذ</th><th class="py-3 px-4">القسم</th><th class="py-3 px-4">الأستاذ</th><th class="py-3 px-4">التاريخ</th><th class="py-3 px-4">الحالة</th></tr></thead>
                     <tbody>{rows}</tbody>
@@ -480,10 +508,6 @@ def director_dashboard_view():
         </div>
     </body></html>
     """
-
-# ==============================================================================
-# تشغيل التطبيق
-# ==============================================================================
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
