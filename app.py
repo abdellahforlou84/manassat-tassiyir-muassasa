@@ -4,6 +4,7 @@
 
 from flask import Flask, render_template_string, request, redirect, url_for, flash, session
 from flask_sqlalchemy import SQLAlchemy
+import pandas as pd
 import os
 from datetime import datetime
 
@@ -16,6 +17,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'ph
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
+EXCEL_FILE = 'قوائم التلاميذ.xlsx'
 
 # 1. جدول المستخدمين والأدوار
 class User(db.Model):
@@ -25,23 +27,15 @@ class User(db.Model):
     role = db.Column(db.String(50), nullable=False)
     fullname = db.Column(db.String(120), nullable=False)
 
-# 2. جدول الأقسام
-class ClassModel(db.Model):
-    __tablename__ = 'classes'
-    id = db.Column(db.Integer, primary_key=True)
-    class_name = db.Column(db.String(100), unique=True, nullable=False)
-
-# 3. جدول التلاميذ المسجلين للأقسام
+# 2. جدول التلاميذ المسجلين (يتم استخراجهم تلقائياً من ملف الإكسل)
 class Student(db.Model):
-    __tablename__ = 'students'
     id = db.Column(db.Integer, primary_key=True)
     fullname = db.Column(db.String(120), nullable=False)
     section_name = db.Column(db.String(100), nullable=False)
     teacher_username = db.Column(db.String(80), nullable=False)
 
-# 4. جدول الغيابات اليومية
+# 3. جدول الغيابات اليومية
 class Attendance(db.Model):
-    __tablename__ = 'attendances'
     id = db.Column(db.Integer, primary_key=True)
     student_name = db.Column(db.String(120), nullable=False)
     section_name = db.Column(db.String(100), nullable=False)
@@ -49,15 +43,38 @@ class Attendance(db.Model):
     date = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), default='غائب')
 
-# 5. جدول دفتر النصوص الرقمي
+# 4. جدول دفتر النصوص الرقمي
 class LessonLog(db.Model):
-    __tablename__ = 'lesson_logs'
     id = db.Column(db.Integer, primary_key=True)
     teacher_name = db.Column(db.String(120), nullable=False)
     section_name = db.Column(db.String(100), nullable=False)
     lesson_title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
     date = db.Column(db.String(50), nullable=False)
+
+# دالة ذكية لقراءة واستخراج كافة الأقسام والتلاميذ تلقائياً من ملف الإكسل المرفق
+def extract_all_sections_from_excel(filepath):
+    sections_set = set()
+    if os.path.exists(filepath):
+        try:
+            xls = pd.ExcelFile(filepath)
+            for sheet in xls.sheet_names:
+                df = pd.read_excel(filepath, sheet_name=sheet)
+                if df.empty:
+                    continue
+                for idx, row in df.iterrows():
+                    row_str = str(row.values[0])
+                    if 'القسم:' in row_str or 'القسم' in row_str:
+                        parts = row_str.split('القسم')
+                        if len(parts) > 1:
+                            sec_name = parts[-1].replace(':', '').strip()
+                            if sec_name:
+                                sections_set.add(sec_name)
+        except Exception as e:
+            print(f"Error reading excel: {e}")
+    
+    # إرجاع القائمة مرتبة
+    return sorted(list(sections_set))
 
 # إنشاء الجداول وتوليد الحسابات الافتراضية عند التشغيل الأول
 with app.app_context():
@@ -275,7 +292,7 @@ def logout():
 
 
 # ==============================================================================
-# البداية: لوحة تحكم الأستاذ
+# البداية: لوحة تحكم الأستاذ (قائمة الأقسام المستخرجة تلقائياً من الملف)
 # ==============================================================================
 
 @app.route('/teacher/dashboard-view')
@@ -286,6 +303,10 @@ def teacher_dashboard_view():
     teacher_uname = session.get('username')
     students = Student.query.filter_by(teacher_username=teacher_uname).all()
     today_date = datetime.now().strftime('%Y-%m-%d')
+
+    # جلب جميع الأقسام استخراجاً مباشراً من ملف الإكسل المرفق
+    extracted_sections = extract_all_sections_from_excel(EXCEL_FILE)
+    section_options_html = "".join([f'<option value="{sec}">{sec}</option>' for sec in extracted_sections])
 
     attendance_rows = ""
     for s in students:
@@ -376,24 +397,10 @@ def teacher_dashboard_view():
                             <input type="text" name="student_fullname" placeholder="مثال: أمين بن علي" required class="w-full px-3 py-2 rounded-lg border text-xs focus:ring-2 focus:ring-blue-500">
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-600 mb-1">اختر القسم المسند</label>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">اختر القسم (مستخرج من ملف القوائم)</label>
                             <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white">
                                 <option value="" disabled selected>-- اختر القسم --</option>
-                                <optgroup label="السنة الأولى ثانوي">
-                                    <option value="1 ج م ع ت 1">1 ج م ع ت 1</option>
-                                    <option value="1 ج م أدب 1">1 ج م أدب 1</option>
-                                </optgroup>
-                                <optgroup label="السنة الثانية ثانوي">
-                                    <option value="2 آداب وفلسفة 1">2 آداب وفلسفة 1</option>
-                                    <option value="2 علوم تجريبية 1">2 علوم تجريبية 1</option>
-                                </optgroup>
-                                <optgroup label="السنة الثالثة ثانوي (الأقسام النهائية)">
-                                    <option value="3 آداب وفلسفة">3 آداب وفلسفة</option>
-                                    <option value="3 لغات أجنبية">3 لغات أجنبية</option>
-                                    <option value="3 علوم تجريبية">3 علوم تجريبية</option>
-                                    <option value="3 رياضيات">3 رياضيات</option>
-                                    <option value="3 تسيير واقتصاد">3 تسيير واقتصاد</option>
-                                </optgroup>
+                                {section_options_html}
                             </select>
                         </div>
                         <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs transition">إضافة تلميذ للقائمة</button>
@@ -416,7 +423,10 @@ def teacher_dashboard_view():
                 <form action="/teacher/submit-lesson" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">القسم</label>
-                        <input type="text" name="section_name" placeholder="مثال: 3 آداب وفلسفة" required class="w-full px-3 py-2 rounded-lg border text-xs">
+                        <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white">
+                            <option value="" disabled selected>-- اختر القسم --</option>
+                            {section_options_html}
+                        </select>
                     </div>
                     <div>
                         <label class="block text-xs font-semibold text-gray-600 mb-1">عنوان الدرس</label>
