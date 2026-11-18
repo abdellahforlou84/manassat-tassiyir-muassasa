@@ -363,6 +363,73 @@ def submit_lesson():
         db.session.commit()
     return redirect(url_for('teacher_dashboard_view'))
 
+    # مسار عرض صفحة تعديل بيانات التلميذ
+@app.route('/teacher/edit-student/<int:sid>', methods=['GET', 'POST'])
+def edit_student(sid):
+    if session.get('role') != 'teacher':
+        return redirect(url_for('home'))
+        
+    student = Student.query.get_or_404(sid)
+    
+    # التأكد من أن التلميذ يتبع للأستاذ الحالي
+    if student.teacher_username != session.get('username') and session.get('username') != 'teacher':
+        return redirect(url_for('teacher_dashboard_view'))
+
+    if request.method == 'POST':
+        new_fullname = request.form.get('fullname', '').strip()
+        new_section = request.form.get('section_name', '').strip()
+        
+        if new_fullname and new_section:
+            student.fullname = new_fullname
+            student.section_name = new_section
+            db.session.commit()
+            return redirect(url_for('teacher_dashboard_view'))
+
+    # قالب صفحة التعديل البسيطة
+    return f"""
+    <html lang="ar" dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <title>تعديل بيانات التلميذ</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>body {{ font-family: 'Cairo', sans-serif; }}</style>
+    </head>
+    <body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md border">
+            <h2 class="text-lg font-bold text-gray-800 mb-4 text-center">تصحيح وتعديل بيانات التلميذ</h2>
+            <form method="POST" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">الاسم واللقب الصحيح</label>
+                    <input type="text" name="fullname" value="{student.fullname}" required class="w-full px-3 py-2 rounded-lg border text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-600 mb-1">القسم</label>
+                    <input type="text" name="section_name" value="{student.section_name}" required class="w-full px-3 py-2 rounded-lg border text-sm">
+                </div>
+                <div class="flex gap-2 pt-2">
+                    <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg text-sm transition">حفظ التعديل</button>
+                    <a href="/teacher/dashboard-view" class="flex-1 text-center bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 rounded-lg text-sm transition">إلغاء</a>
+                </div>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+
+    student_manage_rows = ""
+    for s in students:
+        student_manage_rows += f"""
+        <tr class="border-b">
+            <td class="py-2 px-2 text-xs text-gray-800">{s.fullname}</td>
+            <td class="py-2 px-2 text-xs text-gray-600">{s.section_name}</td>
+            <td class="py-2 px-2 text-xs text-center space-x-2">
+                <a href="/teacher/edit-student/{s.id}" class="text-blue-600 hover:underline font-bold ml-2">تعديل</a>
+                <a href="/teacher/delete-student/{s.id}" class="text-red-600 hover:underline font-bold">حذف</a>
+            </td>
+        </tr>
+        """
+
 # ==============================================================================
 # لوحات تحكم الإدارة (مستشار التربية، الناظر، المدير)
 # ==============================================================================
