@@ -454,7 +454,8 @@ DEFAULT_STUDENTS = [
     {"fullname": "ناصر الشرقي امين", "section_name": "3أف2"},
     {"fullname": "ناصر الشرقي فاطمة", "section_name": "3أف2"},
     {"fullname": "نوقعة لميس", "section_name": "3أف2"},
-    {"fullname": "وعمارة ريان", "section_name": "3أف2"}
+   {"fullname": "وعمارة ريان", "section_name": "3أف2"},
+    
     # --- قسم 3لغ (إسبانية) ---
     {"fullname": "أحمد بلاحة زينب", "section_name": "3لغ (إسبانية)"}, {"fullname": "الشرقى محمد عماد الدين", "section_name": "3لغ (إسبانية)"},
     {"fullname": "بختاوي ريمة", "section_name": "3لغ (إسبانية)"}, {"fullname": "بن مقداد سولاف", "section_name": "3لغ (إسبانية)"},
