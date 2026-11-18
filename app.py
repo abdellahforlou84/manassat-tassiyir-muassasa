@@ -315,26 +315,7 @@ def teacher_dashboard_view():
     students = Student.query.filter_by(teacher_username=teacher_uname).all()
     today_date = datetime.now().strftime('%Y-%m-%d')
 
-    # جلب الأقسام بالتنسيق المطلوب
-    sections_list = get_formatted_sections(EXCEL_FILE)
-    section_options_html = "".join([f'<option value="{sec}">{sec}</option>' for sec in sections_list])
-
-    attendance_rows = ""
-    for s in students:
-        attendance_rows += f"""
-        <tr class="border-b hover:bg-gray-50">
-            <td class="py-2.5 px-3 text-sm font-semibold text-gray-800">{s.fullname}</td>
-            <td class="py-2.5 px-3 text-sm text-gray-600">{s.section_name}</td>
-            <td class="py-2.5 px-3 text-center">
-                <form action="/teacher/mark-absence" method="POST" class="inline">
-                    <input type="hidden" name="student_name" value="{s.fullname}">
-                    <input type="hidden" name="section_name" value="{s.section_name}">
-                    <input type="hidden" name="date" value="{today_date}">
-                    <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">تسجيل غياب اليوم</button>
-                </form>
-            </td>
-        </tr>
-        """
+   
     if not attendance_rows:
         attendance_rows = "<tr><td colspan='3' class='text-center py-4 text-gray-400 text-xs'>لا توجد تلاميذ مسجلين. قم بإضافة التلاميذ أدناه.</td></tr>"
 
