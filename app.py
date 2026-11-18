@@ -700,59 +700,86 @@ def get_students_by_section():
 # ==============================================================================
 
 # ==============================================================================
-# البداية: إدراج الأقسام وتلاميذ الملف تلقائياً عند التشغيل الأول
+# البداية: استيراد وتخزين التلاميذ والأقسام بأمان تام (لا يتوقف السيرفر أبداً)
 # ==============================================================================
-def init_imported_students_data():
-    """
-    تقوم هذه الدالة بملء قاعدة البيانات بجميع الأقسام وقوائم التلاميذ المستخرجة من الإكسل 
-    تلقائياً إذا كان الجدول فارغاً، لتعمل المنصة على Render بدون الحاجة لملف إكسل خارجي.
-    """
-    if Student.query.first():
-        return  # البيانات موجودة مسبقاً
 
-    # عينة شاملة لأبرز الأقسام والتلاميذ (أو القائمة المستخرجة بالكامل)
-    initial_students = [
-        # قسم 1ج م ع01
-        {"fullname": "المراربي أمينة", "section_name": "1ج م ع01"},
-        {"fullname": "بدة ملاك", "section_name": "1ج م ع01"},
-        {"fullname": "بران محمد", "section_name": "1ج م ع01"},
-        {"fullname": "بلعباس بن قرعة كوثر", "section_name": "1ج م ع01"},
-        {"fullname": "بلميلود أدم", "section_name": "1ج م ع01"},
-        # قسم 1ج م أ01
-        {"fullname": "قادة فاطمة الزهراء", "section_name": "1ج م أ01"},
-        {"fullname": "بن علي عبد القادر", "section_name": "1ج م أ01"},
-        # قسم 3 آداب وفلسفة
-        {"fullname": "السنوسي محمد", "section_name": "3 آداب وفلسفة"},
-        {"fullname": "عزاوي إبراهيم", "section_name": "3 آداب وفلسفة"},
-        {"fullname": "مستفاوي مريم", "section_name": "3 آداب وفلسفة"},
-        # قسم 3 علوم تجريبية
-        {"fullname": "بلحاج أحمد", "section_name": "3 علوم تجريبية"},
-        {"fullname": "بوخاري سارة", "section_name": "3 علوم تجريبية"}
-    ]
+import pandas as pd
+import os
 
-    for item in initial_students:
-        student = Student(
-            fullname=item["fullname"],
-            section_name=item["section_name"],
-            teacher_username="teacher"  # ربط افتراضي للأستاذ
-        )
-        db.session.add(student)
-    
+EXCEL_FILE = 'قوائم التلاميذ.xlsx'
+
+def import_students_from_excel(filepath):
+    """
+    دالة آمنة تماماً: تفحص ملف الإكسل إن توفر وتستخرجه، 
+    وإن لم يتوفر على السيرفر تتخطاه بلطف دون أي أخطاء.
+    """
+    if not os.path.exists(filepath):
+        print(f"ملاحظة: ملف {filepath} غير موجود على السيرفر حالياً، المنصة تعمل بشكل طبيعي.")
+        return
+
     try:
-        db.session.commit()
-        print("تم إدراج تلاميذ الأقسام بنجاح في قاعدة البيانات!")
+        xls = pd.ExcelFile(filepath)
+        for sheet in xls.sheet_names:
+            df = pd.read_excel(filepath, sheet_name=sheet)
+            if df.empty:
+                continue
+            
+            current_section = None
+            for idx, row in df.iterrows():
+                row_str = str(row.values[0])
+                
+                if 'القسم:' in row_str or 'القسم' in row_str:
+                    parts = row_str.split('القسم')
+                    if len(parts) > 1:
+                        current_section = parts[-1].replace(':', '').strip()
+                
+                val_no = row.values[0]
+                try:
+                    if pd.notna(val_no) and str(val_no).strip().isdigit() and current_section:
+                        last_name = str(row.values[1]).strip() if pd.notna(row.values[1]) else ""
+                        first_name = str(row.values[2]).strip() if pd.notna(row.values[2]) else ""
+                        
+                        if last_name or first_name:
+                            full_name = f"{last_name} {first_name}".strip()
+                            
+                            existing = Student.query.filter_by(fullname=full_name, section_name=current_section).first()
+                            if not existing:
+                                new_student = Student(
+                                    fullname=full_name, 
+                                    section_name=current_section, 
+                                    teacher_username='system_imported'
+                                )
+                                db.session.add(new_student)
+                except:
+                    pass
+            db.session.commit()
+        print("تم فحص واستيراد ملف الإكسل بنجاح!")
+        
     except Exception as e:
         db.session.rollback()
-        print(f"خطأ في إدراج التلاميذ: {e}")
+        print(f"حدث خطأ بسيط أثناء قراءة ملف الإكسل: {e}")
 
-# تنفيذ دالة الإدراج تلقائياً داخل سياق التطبيق
+# تشغيل دالة الاستيراد بأمان داخل سياق التطبيق
 with app.app_context():
-    init_imported_students_data()
+    try:
+        import_students_from_excel(EXCEL_FILE)
+    except Exception as ex:
+        print(f"تخطي الاستيراد: {ex}")
+
+# مسار برمجي (API) لجلب تلاميذ قسم معين فور اختيار الأستاذ له من القائمة المنسدلة
+@app.route('/api/get-students-by-section', methods=['GET'])
+def get_students_by_section():
+    section_name = request.args.get('section_name', '').strip()
+    if not section_name:
+        return jsonify([])
+    
+    students = Student.query.filter_by(section_name=section_name).all()
+    student_list = [s.fullname for s in students]
+    return jsonify(student_list)
 
 # ==============================================================================
-# النهاية: إدراج الأقسام وتلاميذ الملف تلقائياً
+# النهاية: استيراد وتخزين التلاميذ والأقسام
 # ==============================================================================
-
 
 # ==============================================================================
 # البداية: تشغيل السيرفر
