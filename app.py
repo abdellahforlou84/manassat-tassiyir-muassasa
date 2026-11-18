@@ -27,7 +27,7 @@ class User(db.Model):
     role = db.Column(db.String(50), nullable=False)
     fullname = db.Column(db.String(120), nullable=False)
 
-# 2. جدول التلاميذ المسجلين (يتم استخراجهم تلقائياً من ملف الإكسل)
+# 2. جدول التلاميذ المسجلين
 class Student(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     fullname = db.Column(db.String(120), nullable=False)
@@ -52,9 +52,9 @@ class LessonLog(db.Model):
     content = db.Column(db.Text, nullable=False)
     date = db.Column(db.String(50), nullable=False)
 
-# دالة ذكية لقراءة واستخراج كافة الأقسام والتلاميذ تلقائياً من ملف الإكسل المرفق
-def extract_all_sections_from_excel(filepath):
-    sections_set = set()
+# دالة ذكية لتنظيم واستخراج الأقسام حسب التنسيق الإداري المطلوب
+def get_formatted_sections(filepath):
+    extracted = set()
     if os.path.exists(filepath):
         try:
             xls = pd.ExcelFile(filepath)
@@ -67,14 +67,25 @@ def extract_all_sections_from_excel(filepath):
                     if 'القسم:' in row_str or 'القسم' in row_str:
                         parts = row_str.split('القسم')
                         if len(parts) > 1:
-                            sec_name = parts[-1].replace(':', '').strip()
-                            if sec_name:
-                                sections_set.add(sec_name)
+                            sec = parts[-1].replace(':', '').strip()
+                            if sec:
+                                extracted.add(sec)
         except Exception as e:
-            print(f"Error reading excel: {e}")
+            print(f"Error: {e}")
+            
+    # إذا توفرت أقسام من الملف يتم إرجاعها، أو اعتماد القائمة الرسمية الميدانية للثانوية
+    if extracted:
+        return sorted(list(extracted))
     
-    # إرجاع القائمة مرتبة
-    return sorted(list(sections_set))
+    # القائمة النموذجية المعتمدة حسب طلبكم الكريم
+    return [
+        "1ج م ع01", "1ج م ع02", "1ج م ع03", "1ج م ع04", "1ج م ع05",
+        "1ج م أ01", "1ج م أ02", "1ج م أ03",
+        "2أف1", "2أف2",
+        "2ع ت1", "2ع ت2",
+        "2لغ", "2ريا", "2تق", "2تر",
+        "3أف1", "3أف2", "3لغ", "3ع ت1", "3ع ت2", "3ريا", "3ت ر"
+    ]
 
 # إنشاء الجداول وتوليد الحسابات الافتراضية عند التشغيل الأول
 with app.app_context():
@@ -292,7 +303,7 @@ def logout():
 
 
 # ==============================================================================
-# البداية: لوحة تحكم الأستاذ (قائمة الأقسام المستخرجة تلقائياً من الملف)
+# البداية: لوحة تحكم الأستاذ (مع الأقسام المنظمة بالصيغ المطلوبة)
 # ==============================================================================
 
 @app.route('/teacher/dashboard-view')
@@ -304,9 +315,9 @@ def teacher_dashboard_view():
     students = Student.query.filter_by(teacher_username=teacher_uname).all()
     today_date = datetime.now().strftime('%Y-%m-%d')
 
-    # جلب جميع الأقسام استخراجاً مباشراً من ملف الإكسل المرفق
-    extracted_sections = extract_all_sections_from_excel(EXCEL_FILE)
-    section_options_html = "".join([f'<option value="{sec}">{sec}</option>' for sec in extracted_sections])
+    # جلب الأقسام بالتنسيق المطلوب
+    sections_list = get_formatted_sections(EXCEL_FILE)
+    section_options_html = "".join([f'<option value="{sec}">{sec}</option>' for sec in sections_list])
 
     attendance_rows = ""
     for s in students:
@@ -397,7 +408,7 @@ def teacher_dashboard_view():
                             <input type="text" name="student_fullname" placeholder="مثال: أمين بن علي" required class="w-full px-3 py-2 rounded-lg border text-xs focus:ring-2 focus:ring-blue-500">
                         </div>
                         <div>
-                            <label class="block text-xs font-semibold text-gray-600 mb-1">اختر القسم (مستخرج من ملف القوائم)</label>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">اختر القسم</label>
                             <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white">
                                 <option value="" disabled selected>-- اختر القسم --</option>
                                 {section_options_html}
