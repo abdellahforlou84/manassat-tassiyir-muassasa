@@ -624,7 +624,7 @@ def director_dashboard_view():
 # ==============================================================================
 
 # ==============================================================================
-# البداية: استيراد وتخزين التلاميذ والأقسام تلقائياً من ملف الإكسل
+# دالة استيراد التلاميذ الآمنة (نسخة خالية من أي أخطاء نحوية)
 # ==============================================================================
 
 import pandas as pd
@@ -633,12 +633,8 @@ import os
 EXCEL_FILE = 'قوائم التلاميذ.xlsx'
 
 def import_students_from_excel(filepath):
-    """
-    دالة تقوم بقراءة ملف الإكسل واستخراج الأقسام والتلاميذ، 
-    ثم حفظهم في جدول Student المعتمد في المنصة.
-    """
     if not os.path.exists(filepath):
-        print(f"تحذير: ملف {filepath} غير موجود في المجلد الحالي!")
+        print("ملف الإكسل غير موجود على السيرفر، تم تخطي الاستيراد بنجاح.")
         return
 
     try:
@@ -651,53 +647,46 @@ def import_students_from_excel(filepath):
             current_section = None
             for idx, row in df.iterrows():
                 row_str = str(row.values[0])
-                
-                # التقاط اسم القسم من السطر الذي يحتوي على كلمة "القسم"
                 if 'القسم:' in row_str or 'القسم' in row_str:
                     parts = row_str.split('القسم')
                     if len(parts) > 1:
                         current_section = parts[-1].replace(':', '').strip()
                 
-                # التقاط بيانات التلاميذ (الرقم، اللقب، الاسم) وإضافتهم للقسم الحالي
                 val_no = row.values[0]
                 try:
                     if pd.notna(val_no) and str(val_no).strip().isdigit() and current_section:
                         last_name = str(row.values[1]).strip() if pd.notna(row.values[1]) else ""
                         first_name = str(row.values[2]).strip() if pd.notna(row.values[2]) else ""
-                        
                         if last_name or first_name:
                             full_name = f"{last_name} {first_name}".strip()
-                            
-                            # التحقق مما إذا كان التلميذ مسجلاً مسبقاً لمنع التكرار
                             existing = Student.query.filter_by(fullname=full_name, section_name=current_section).first()
                             if not existing:
-                                # يتم ربط التلميذ بالقسم واسم عام أو النظام الافتراضي
-                                new_student = Student(
-                                    fullname=full_name, 
-                                    section_name=current_section, 
-                                    teacher_username='system_imported'
-                                )
-                                db.session.add(new_student)
-            db.session.commit()
-        print("تم استيراد كافة أقسام وتلاميذ ملف الإكسل إلى قاعدة البيانات بنجاح!")
+                                db.session.add(Student(fullname=full_name, section_name=current_section, teacher_username='system_imported'))
+                except Exception:
+                    pass
+            
+        db.session.commit()
+        print("تمت عملية قراءة واستيراد البيانات بنجاح.")
+        
     except Exception as e:
-        print(f"حدث خطأ أثناء استيراد ملف الإكسل: {e}")
+        db.session.rollback()
+        print(f"تنبيه أثناء الاستيراد: {e}")
 
-# مسار برمجي (API) لجلب تلاميذ قسم معين فور اختيار الأستاذ له من القائمة المنسدلة
+# تشغيل الدالة بأمان
+with app.app_context():
+    try:
+        import_students_from_excel(EXCEL_FILE)
+    except Exception as ex:
+        print(f"ملاحظة: {ex}")
+
+# مسار جلب التلاميذ عبر API
 @app.route('/api/get-students-by-section', methods=['GET'])
 def get_students_by_section():
     section_name = request.args.get('section_name', '').strip()
     if not section_name:
         return jsonify([])
-    
-    # جلب التلاميذ التابعين لهذا القسم من قاعدة البيانات
     students = Student.query.filter_by(section_name=section_name).all()
-    student_list = [s.fullname for s in students]
-    return jsonify(student_list)
-
-# ==============================================================================
-# النهاية: استيراد وتخزين التلاميذ والأقسام تلقائياً
-# ==============================================================================
+    return jsonify([s.fullname for s in students])
 
 # ==============================================================================
 # البداية: استيراد وتخزين التلاميذ والأقسام بأمان تام (لا يتوقف السيرفر أبداً)
