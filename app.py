@@ -927,6 +927,159 @@ def director_dashboard_view():
         </div>
     </body></html>
     """
+# ==============================================================================
+# مسارات التسجيل الجديد واستعادة الحساب (توضع في نهاية app.py)
+# ==============================================================================
+
+from flask import request, redirect, url_for, flash, render_template_string
+from werkzeug.security import generate_password_hash
+import secrets
+
+
+REGISTER_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>تسجيل حساب جديد</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+</head>
+<body class="bg-light py-5">
+    <div class="container" style="max-width: 520px;">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h4 class="mb-4 text-center">إنشاء حساب جديد</h4>
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                  {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                  {% endfor %}
+                {% endwith %}
+                <form method="POST" action="{{ url_for('register_account') }}">
+                    <div class="mb-3">
+                        <label class="form-label">الاسم الكامل</label>
+                        <input type="text" name="fullname" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">البريد الإلكتروني أو اسم المستخدم</label>
+                        <input type="text" name="username" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">الصفة / الدور</label>
+                        <select name="role" class="form-select">
+                            <option value="teacher">أستاذ</option>
+                            <option value="counselor">مستشار</option>
+                            <option value="deputy">نائب / مفتش</option>
+                            <option value="director">مدير</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">كلمة المرور</label>
+                        <input type="password" name="password" class="form-control" required minlength="6">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">تسجيل الحساب</button>
+                </form>
+                <div class="mt-3 text-center">
+                    <a href="{{ url_for('recover_account') }}">نسيت كلمة المرور؟ استعادة الحساب</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+
+RECOVER_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>استعادة الحساب</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
+</head>
+<body class="bg-light py-5">
+    <div class="container" style="max-width: 520px;">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h4 class="mb-4 text-center">استعادة الحساب</h4>
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                  {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                  {% endfor %}
+                {% endwith %}
+                <form method="POST" action="{{ url_for('recover_account') }}">
+                    <div class="mb-3">
+                        <label class="form-label">أدخل البريد الإلكتروني أو اسم المستخدم المسجل</label>
+                        <input type="text" name="identifier" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">كلمة المرور الجديدة (اختياري عند التعيين المباشر)</label>
+                        <input type="password" name="new_password" class="form-control" minlength="6">
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">استعادة الحساب</button>
+                </form>
+                <div class="mt-3 text-center">
+                    <a href="{{ url_for('register_account') }}">إنشاء حساب جديد</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+
+@app.route("/register", methods=["GET", "POST"], endpoint="register_account")
+def register_account():
+    if request.method == "POST":
+        fullname = (request.form.get("fullname") or "").strip()
+        username = (request.form.get("username") or "").strip()
+        role = (request.form.get("role") or "teacher").strip()
+        password = request.form.get("password") or ""
+
+        if not fullname or not username or not password:
+            flash("يرجى ملء جميع الحقول المطلوبة.", "danger")
+            return redirect(url_for("register_account"))
+
+        password_hash = generate_password_hash(password)
+
+        # اربط هذا الجزء بقاعدة البيانات أو القاموس الخاص بك في app.py
+        # مثال إذا كانت لديك دالة get_db() أو اتصال SQLite/PostgreSQL:
+        # conn = get_db()
+        # cur = conn.cursor()
+        # cur.execute(
+        #     "INSERT INTO users (fullname, username, role, password_hash) VALUES (%s, %s, %s, %s)",
+        #     (fullname, username, role, password_hash),
+        # )
+        # conn.commit()
+
+        flash(f"تم تسجيل الحساب ({username}) بنجاح.", "success")
+        return redirect(url_for("register_account"))
+
+    return render_template_string(REGISTER_PAGE_HTML)
+
+
+@app.route("/recover-account", methods=["GET", "POST"], endpoint="recover_account")
+def recover_account():
+    if request.method == "POST":
+        identifier = (request.form.get("identifier") or "").strip()
+        new_password = request.form.get("new_password") or ""
+
+        if not identifier:
+            flash("يرجى إدخال البريد الإلكتروني أو اسم المستخدم.", "danger")
+            return redirect(url_for("recover_account"))
+
+        reset_token = secrets.token_urlsafe(16)
+        _ = generate_password_hash(new_password) if new_password else None
+
+        # اربط هذا الجزء بقاعدة البيانات للتحقق من وجود المستخدم وتحديث كلمة المرور أو إرسال رمز الاستعادة
+        flash(
+            f"تم معالجة طلب استعادة الحساب لـ ({identifier}) — رمز التحقق المؤقت: {reset_token}",
+            "info",
+        )
+        return redirect(url_for("recover_account"))
+
+    return render_template_string(RECOVER_PAGE_HTML)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
