@@ -1162,7 +1162,16 @@ def recover_account():
     return render_template_string(RECOVER_PAGE_HTML)
 import json
 import os
-from flask import Flask, render_template_string, request, redirect, url_for, flash
+from functools import wraps
+from flask import (
+    Flask,
+    render_template_string,
+    request,
+    redirect,
+    url_for,
+    flash,
+    session,
+)
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -1226,6 +1235,105 @@ class User(db.Model):
 with app.app_context():
     db.create_all()
 
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user_id" not in session:
+            flash("يرجى تسجيل الدخول أولاً.", "danger")
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+LOGIN_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تسجيل الدخول - ثانوية الشهيد قوديد أحمد</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-xl font-bold text-gray-800">تسجيل الدخول إلى المنصة</h1>
+            <p class="text-xs text-blue-600 font-semibold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="space-y-2 mb-4">
+              {% for category, message in messages %}
+                <div class="p-3 rounded-lg text-xs font-bold text-center border {% if category == 'success' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-red-50 text-red-700 border-red-200{% endif %}">
+                  {{ message }}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('login') }}" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
+                <input type="text" name="username" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
+                <input type="password" name="password" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 rounded-lg shadow-lg transition">
+                دخول
+            </button>
+        </form>
+
+        <div class="mt-5 pt-4 border-t flex justify-between items-center text-xs font-semibold">
+            <a href="{{ url_for('register_account') }}" class="text-indigo-700 hover:underline">إنشاء حساب جديد</a>
+            <a href="{{ url_for('recover_account') }}" class="text-amber-700 hover:underline">استعادة الحساب</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+DASHBOARD_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة الحساب - ثانوية الشهيد قوديد أحمد</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-slate-100 min-h-screen p-6">
+    <div class="max-w-3xl mx-auto bg-white rounded-2xl shadow p-6 border border-slate-200">
+        <div class="flex justify-between items-center border-b pb-4 mb-5">
+            <div>
+                <h1 class="text-lg font-bold text-slate-800">مرحباً، {{ user.fullname }}</h1>
+                <p class="text-xs text-slate-500">اسم المستخدم: {{ user.username }} | الصفة: {{ user.role }}</p>
+            </div>
+            <a href="{{ url_for('logout') }}" class="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2 rounded-lg">تسجيل الخروج</a>
+        </div>
+
+        <h2 class="text-sm font-bold text-slate-700 mb-2">الأقسام المسندة المسجلة في قاعدة البيانات:</h2>
+        {% if user.sections %}
+            <div class="flex flex-wrap gap-2">
+                {% for sec in user.sections %}
+                    <span class="bg-blue-50 text-blue-800 border border-blue-200 text-xs font-bold px-3 py-1.5 rounded-lg">{{ sec }}</span>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="text-xs text-slate-500">لا توجد أقسام مسندة حالياً لهذا الحساب.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
 
 REGISTER_PAGE_HTML = """
 <!DOCTYPE html>
@@ -1296,7 +1404,7 @@ REGISTER_PAGE_HTML = """
         </form>
 
         <div class="mt-5 pt-4 border-t flex justify-between items-center text-xs font-semibold">
-            <a href="{{ url_for('home') }}" class="text-blue-700 hover:underline">العودة للرئيسية</a>
+            <a href="{{ url_for('login') }}" class="text-blue-700 hover:underline">العودة لتسجيل الدخول</a>
             <a href="{{ url_for('recover_account') }}" class="text-amber-700 hover:underline">استعادة الحساب</a>
         </div>
     </div>
@@ -1353,7 +1461,7 @@ RECOVER_PAGE_HTML = """
         </form>
 
         <div class="mt-5 pt-4 border-t flex justify-between items-center text-xs font-semibold">
-            <a href="{{ url_for('home') }}" class="text-blue-700 hover:underline">العودة للرئيسية</a>
+            <a href="{{ url_for('login') }}" class="text-blue-700 hover:underline">العودة لتسجيل الدخول</a>
             <a href="{{ url_for('register_account') }}" class="text-indigo-700 hover:underline">إنشاء حساب جديد</a>
         </div>
     </div>
@@ -1364,7 +1472,44 @@ RECOVER_PAGE_HTML = """
 
 @app.route("/")
 def home():
-    return redirect(url_for("register_account"))
+    if "user_id" in session:
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"], endpoint="login")
+def login():
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip().lower()
+        password = request.form.get("password") or ""
+
+        user = User.query.filter_by(username=username).first()
+        if user and user.verify_password(password):
+            session["user_id"] = user.id
+            flash("تم تسجيل الدخول بنجاح.", "success")
+            return redirect(url_for("dashboard"))
+
+        flash("اسم المستخدم أو كلمة المرور غير صحيحة.", "danger")
+        return redirect(url_for("login"))
+
+    return render_template_string(LOGIN_PAGE_HTML)
+
+
+@app.route("/dashboard", endpoint="dashboard")
+@login_required
+def dashboard():
+    user = User.query.get(session["user_id"])
+    if not user:
+        session.clear()
+        return redirect(url_for("login"))
+    return render_template_string(DASHBOARD_PAGE_HTML, user=user)
+
+
+@app.route("/logout", endpoint="logout")
+def logout():
+    session.clear()
+    flash("تم تسجيل الخروج.", "success")
+    return redirect(url_for("login"))
 
 
 @app.route("/register", methods=["GET", "POST"], endpoint="register_account")
