@@ -567,7 +567,7 @@ DEFAULT_STUDENTS = [
     {"fullname": "عامر محلى عثمان", "section_name": "3ريا"},
     {"fullname": "غريسى هاجر منال", "section_name": "3ريا"},
     {"fullname": "قليل عصام الدين", "section_name": "3ريا"},
-    {"fullname": "منقور منال", "section_name": "3ريا"}
+    {"fullname": "منقور منال", "section_name": "3ريا"},
 
 # --- قسم 3تر (هـ ك) ---
     {"fullname": "بغداد تسنيم", "section_name": "3تر (هـ ك)"},
@@ -595,7 +595,7 @@ DEFAULT_STUDENTS = [
     {"fullname": "سيد احمد أية نهاد", "section_name": "3تر (هـ م)"},
     {"fullname": "صابر محمد آمين", "section_name": "3تر (هـ م)"},
     {"fullname": "غوال رميساء", "section_name": "3تر (هـ م)"},
-    {"fullname": "لزرق هبة", "section_name": "3تر (هـ م)"}
+    {"fullname": "لزرق هبة", "section_name": "3تر (هـ م)"},
 ]
 
 # تهيئة قاعدة البيانات والتلاميذ الافتراضيين
