@@ -1161,6 +1161,104 @@ def recover_account():
 
     return render_template_string(RECOVER_PAGE_HTML)
 
+import json
+import os
+from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash
+
+app = Flask(__name__)
+
+# استخدام قاعدة بيانات دائمة عبر DATABASE_URL عند توفرها، مع الاحتفاظ بمسار SQLite محلي كبديل
+database_url = os.environ.get("DATABASE_URL", "sqlite:///philo_school.db")
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "change-this-secret-key")
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
+
+ROLES = ["Director", "Inspector Deputy", "Counselor", "Teacher"]
+
+OFFICIAL_SECTIONS = [
+    "1أ1", "1أ2", "1أ3", "1ع1", "1ع2", "1ع3", "1ع4", "1ع5", "1ع6",
+    "2أف1", "2أف2", "2لغ", "2ع ت1", "2ع ت2",
+    "2تق", "2ريا", "2تر (هـ ط)", "2تر (هـ ك)", "2تر (هـ م)",
+    "3أف1", "3أف2", "3لغ (إسبانية)", "3لغ (ألمانية)", "3ع ت1", "3ع ت2",
+    "3تق", "3ريا", "3تر (هـ ك)", "3تر (هـ م)"
+]
+
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    fullname = db.Column(db.String(120), nullable=False)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(40), nullable=False, default="Teacher")
+    sections_json = db.Column(db.Text, nullable=False, default="[]")
+
+    @property
+    def sections(self):
+        try:
+            data = json.loads(self.sections_json or "[]")
+            return data if isinstance(data, list) else []
+        except ValueError:
+            return []
+
+    @sections.setter
+    def sections(self, value):
+        cleaned = [s for s in value if s in OFFICIAL_SECTIONS]
+        self.sections_json = json.dumps(cleaned, ensure_ascii=False)
+
+
+with app.app_context():
+    db.create_all()
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        fullname = request.form.get("fullname", "").strip()
+        username = request.form.get("username", "").strip().lower()
+        password = request.form.get("password", "")
+        role = request.form.get("role", "Teacher").strip()
+        selected_sections = [
+            s for s in request.form.getlist("sections") if s in OFFICIAL_SECTIONS
+        ]
+
+        if not fullname or not username or not password:
+            flash("يرجى إدخال الاسم الكامل واسم المستخدم وكلمة المرور.", "error")
+            return render_template(
+                "register.html", roles=ROLES, sections=OFFICIAL_SECTIONS
+            )
+
+        if role not in ROLES:
+            role = "Teacher"
+
+        if User.query.filter_by(username=username).first():
+            flash("اسم المستخدم مستعمل مسبقاً.", "error")
+            return render_template(
+                "register.html", roles=ROLES, sections=OFFICIAL_SECTIONS
+            )
+
+        new_user = User(
+            fullname=fullname,
+            username=username,
+            password_hash=generate_password_hash(password),
+            role=role,
+        )
+        new_user.sections = selected_sections
+
+        db.session.add(new_user)
+        db.session.commit()
+
+        flash("تم إنشاء الحساب وحفظ الأقسام المختارة بنجاح.", "success")
+        return redirect(url_for("register"))
+
+    return render_template("register.html", roles=ROLES, sections=OFFICIAL_SECTIONS)
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
