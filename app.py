@@ -553,7 +553,7 @@ DEFAULT_STUDENTS = [
     {"fullname": "قليل حسام الدين", "section_name": "3تق"},
     {"fullname": "مصابيح ياسر", "section_name": "3تق"},
     {"fullname": "مقداد يوسف", "section_name": "3تق"},
-    {"fullname": "يحي لقمان", "section_name": "3تق"}
+    {"fullname": "يحي لقمان", "section_name": "3تق"},
 
 # --- قسم 3ريا ---
     {"fullname": "بلميلود منال", "section_name": "3ريا"},
