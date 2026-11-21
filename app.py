@@ -1160,20 +1160,11 @@ def recover_account():
         return redirect(url_for("recover_account"))
 
     return render_template_string(RECOVER_PAGE_HTML)
-
 import json
 import os
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template_string, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash
-
-app = Flask(__name__)
-
-import json
-import os
-from flask import Flask, render_template, request, redirect, url_for, flash
-from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
@@ -1188,7 +1179,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
 
-ROLES = ["Director", "Inspector Deputy", "Counselor", "Teacher"]
+ROLES = ["teacher", "counselor", "inspector_deputy", "director"]
 
 OFFICIAL_SECTIONS = [
     "1أ1", "1أ2", "1أ3", "1ع1", "1ع2", "1ع3", "1ع4", "1ع5", "1ع6",
@@ -1204,8 +1195,19 @@ class User(db.Model):
     fullname = db.Column(db.String(120), nullable=False)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(40), nullable=False, default="Teacher")
+    role = db.Column(db.String(40), nullable=False, default="teacher")
     sections_json = db.Column(db.Text, nullable=False, default="[]")
+
+    @property
+    def password(self):
+        raise AttributeError("password is write-only")
+
+    @password.setter
+    def password(self, raw_password):
+        self.password_hash = generate_password_hash(raw_password)
+
+    def verify_password(self, raw_password):
+        return check_password_hash(self.password_hash, raw_password)
 
     @property
     def sections(self):
@@ -1225,58 +1227,210 @@ with app.app_context():
     db.create_all()
 
 
+REGISTER_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تسجيل حساب جديد - ثانوية الشهيد قوديد أحمد</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-2xl p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-xl font-bold text-gray-800">تسجيل حساب أستاذ / عضو</h1>
+            <p class="text-xs text-blue-600 font-semibold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="space-y-2 mb-4">
+              {% for category, message in messages %}
+                <div class="p-3 rounded-lg text-xs font-bold text-center border {% if category == 'success' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-red-50 text-red-700 border-red-200{% endif %}">
+                  {{ message }}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('register_account') }}" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الاسم الكامل</label>
+                <input type="text" name="fullname" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
+                <input type="text" name="username" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية (الدور)</label>
+                <select name="role" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none">
+                    <option value="teacher">أستاذ</option>
+                    <option value="counselor">مستشار التربية</option>
+                    <option value="inspector_deputy">الناظر</option>
+                    <option value="director">المدير</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
+                <input type="password" name="password" required minlength="4" class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">الأقسام المسندة</label>
+                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-56 overflow-y-auto p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    {% for section in sections %}
+                        <label class="flex items-center gap-2 text-xs font-semibold text-gray-700 bg-white px-2.5 py-1.5 rounded border border-gray-200 cursor-pointer hover:bg-blue-50">
+                            <input type="checkbox" name="sections" value="{{ section }}" class="rounded text-blue-600 focus:ring-blue-500">
+                            <span>{{ section }}</span>
+                        </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 rounded-lg shadow-lg transition">
+                تسجيل الحساب
+            </button>
+        </form>
+
+        <div class="mt-5 pt-4 border-t flex justify-between items-center text-xs font-semibold">
+            <a href="{{ url_for('home') }}" class="text-blue-700 hover:underline">العودة للرئيسية</a>
+            <a href="{{ url_for('recover_account') }}" class="text-amber-700 hover:underline">استعادة الحساب</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+RECOVER_PAGE_HTML = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>استعادة الحساب - ثانوية الشهيد قوديد أحمد</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Cairo', sans-serif; }</style>
+</head>
+<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="text-center mb-6">
+            <h1 class="text-xl font-bold text-gray-800">استعادة الحساب وتعيين كلمة مرور جديدة</h1>
+            <p class="text-xs text-blue-600 font-semibold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="space-y-2 mb-4">
+              {% for category, message in messages %}
+                <div class="p-3 rounded-lg text-xs font-bold text-center border {% if category == 'success' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-red-50 text-red-700 border-red-200{% endif %}">
+                  {{ message }}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('recover_account') }}" class="space-y-4">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم المسجل</label>
+                <input type="text" name="username" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الاسم الكامل المطابق للحساب</label>
+                <input type="text" name="fullname" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور الجديدة</label>
+                <input type="password" name="new_password" required minlength="4" class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
+            </div>
+            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow-lg transition">
+                تحديث كلمة المرور
+            </button>
+        </form>
+
+        <div class="mt-5 pt-4 border-t flex justify-between items-center text-xs font-semibold">
+            <a href="{{ url_for('home') }}" class="text-blue-700 hover:underline">العودة للرئيسية</a>
+            <a href="{{ url_for('register_account') }}" class="text-indigo-700 hover:underline">إنشاء حساب جديد</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+
 @app.route("/")
-def index():
-    return redirect(url_for("register"))
+def home():
+    return redirect(url_for("register_account"))
 
 
-@app.route("/register", methods=["GET", "POST"])
-def register():
+@app.route("/register", methods=["GET", "POST"], endpoint="register_account")
+def register_account():
     if request.method == "POST":
-        fullname = request.form.get("fullname", "").strip()
-        username = request.form.get("username", "").strip().lower()
-        password = request.form.get("password", "")
-        role = request.form.get("role", "Teacher").strip()
+        fullname = (request.form.get("fullname") or "").strip()
+        username = (request.form.get("username") or "").strip().lower()
+        role = (request.form.get("role") or "teacher").strip()
+        password = request.form.get("password") or ""
         selected_sections = [
             s for s in request.form.getlist("sections") if s in OFFICIAL_SECTIONS
         ]
 
         if not fullname or not username or not password:
-            flash("يرجى إدخال الاسم الكامل واسم المستخدم وكلمة المرور.", "error")
-            return render_template(
-                "register.html", roles=ROLES, sections=OFFICIAL_SECTIONS
-            )
+            flash("يرجى ملء جميع الحقول المطلوبة.", "danger")
+            return redirect(url_for("register_account"))
 
         if role not in ROLES:
-            role = "Teacher"
+            role = "teacher"
 
         if User.query.filter_by(username=username).first():
-            flash("اسم المستخدم مستعمل مسبقاً.", "error")
-            return render_template(
-                "register.html", roles=ROLES, sections=OFFICIAL_SECTIONS
-            )
+            flash("اسم المستخدم مستعمل مسبقاً، يرجى اختيار اسم آخر.", "danger")
+            return redirect(url_for("register_account"))
 
         new_user = User(
             fullname=fullname,
             username=username,
-            password_hash=generate_password_hash(password),
             role=role,
+            password=password,
         )
         new_user.sections = selected_sections
 
         db.session.add(new_user)
         db.session.commit()
 
-        flash("تم إنشاء الحساب وحفظ الأقسام المختارة بنجاح.", "success")
-        return redirect(url_for("register"))
+        flash(f"تم إنشاء الحساب ({username}) وحفظ الأقسام بنجاح.", "success")
+        return redirect(url_for("register_account"))
 
-    return render_template("register.html", roles=ROLES, sections=OFFICIAL_SECTIONS)
+    return render_template_string(REGISTER_PAGE_HTML, sections=OFFICIAL_SECTIONS)
+
+
+@app.route("/recover-account", methods=["GET", "POST"], endpoint="recover_account")
+def recover_account():
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip().lower()
+        fullname = (request.form.get("fullname") or "").strip()
+        new_password = request.form.get("new_password") or ""
+
+        if not username or not fullname or not new_password:
+            flash("يرجى إدخال اسم المستخدم، الاسم الكامل، وكلمة المرور الجديدة.", "danger")
+            return redirect(url_for("recover_account"))
+
+        user = User.query.filter_by(username=username, fullname=fullname).first()
+        if not user:
+            flash("لم يتم العثور على حساب مطابق لاسم المستخدم والاسم الكامل المدخلين.", "danger")
+            return redirect(url_for("recover_account"))
+
+        user.password = new_password
+        db.session.commit()
+
+        flash("تم تحديث كلمة المرور بنجاح. يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة.", "success")
+        return redirect(url_for("recover_account"))
+
+    return render_template_string(RECOVER_PAGE_HTML)
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
