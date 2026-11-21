@@ -59,13 +59,13 @@ class LessonLog(db.Model):
 # الأقسام الرسمية والتخصصات المعتمدة
 OFFICIAL_SECTIONS = [
     "1أ1", "1أ2", "1أ3", "1ع1", "1ع2", "1ع3", "1ع4", "1ع5", "1ع6",
-    "2أف1", "2أف2", "2لغ", "2ع ت1", "2ع ت2", 
+    "2أف1", "2أف2", "2لغ", "2ع ت1", "2ع ت2",
     "2تق", "2ريا", "2تر (هـ ط)", "2تر (هـ ك)", "2تر (هـ م)",
-    "3أف1", "3أف2", "3لغ (إسبانية)", "3لغ (ألمانية)", "3ع ت1", "3ع ت2", 
+    "3أف1", "3أف2", "3لغ (إسبانية)", "3لغ (ألمانية)", "3ع ت1", "3ع ت2",
     "3تق", "3ريا", "3تر (هـ ك)", "3تر (هـ م)"
 ]
 
-# قائمة التلاميذ الشاملة والمصنفة حسب الأقسام والتخصصات
+# قائمة التلاميذ الشاملة والمصنفة حسب الأقسام والتخصصات - الدفعة 1 (السنة الأولى)
 DEFAULT_STUDENTS = [
     # --- قسم 1أ1 ---
     {"fullname": "المراربي أمينة", "section_name": "1أ1"}, {"fullname": "بدة ملاك", "section_name": "1أ1"},
@@ -257,8 +257,8 @@ DEFAULT_STUDENTS = [
     {"fullname": "مقدم جلال", "section_name": "1ع6"}, {"fullname": "مكى اكرام فاطمة", "section_name": "1ع6"},
     {"fullname": "موساوي وجدان", "section_name": "1ع6"}, {"fullname": "ميموني ألاء", "section_name": "1ع6"},
     {"fullname": "نباتى شرقى زهرة حليمة", "section_name": "1ع6"}, {"fullname": "يخو عبد القادر سيف الدين", "section_name": "1ع6"},
-
-    # --- قسم 2أف1 ---
+   
+# --- قسم 2أف1 ---
     {"fullname": "بخدة محمد ريان", "section_name": "2أف1"}, {"fullname": "بريشي عبد الاله", "section_name": "2أف1"},
     {"fullname": "بلهوان رميساء", "section_name": "2أف1"}, {"fullname": "بلولو ميلود", "section_name": "2أف1"},
     {"fullname": "بن زايد عبدالجليل", "section_name": "2أف1"}, {"fullname": "بن شراير أميمة", "section_name": "2أف1"},
@@ -403,7 +403,8 @@ DEFAULT_STUDENTS = [
     {"fullname": "تلى آية", "section_name": "2تر (هـ م)"}, {"fullname": "خير الدين عبد الهادي يحيى", "section_name": "2تر (هـ م)"},
     {"fullname": "سى فضيل عبد النور", "section_name": "2تر (هـ م)"}, {"fullname": "قرشى هديل", "section_name": "2تر (هـ م)"},
     {"fullname": "مداح بشرى", "section_name": "2تر (هـ م)"}, {"fullname": "نوال ريهام سندس", "section_name": "2تر (هـ م)"},
-   # --- قسم 3أف1 ---
+
+    # --- قسم 3أف1 ---
     {"fullname": "بلهزيل نور الهدى", "section_name": "3أف1"}, {"fullname": "بن زهرة آية", "section_name": "3أف1"},
     {"fullname": "بن عودة ياسين", "section_name": "3أف1"}, {"fullname": "بن يعقوب مريم", "section_name": "3أف1"},
     {"fullname": "بن يوس عومرية", "section_name": "3أف1"}, {"fullname": "بوخاري خضرة فدوى", "section_name": "3أف1"},
@@ -453,8 +454,8 @@ DEFAULT_STUDENTS = [
     {"fullname": "ناصر الشرقي امين", "section_name": "3أف2"},
     {"fullname": "ناصر الشرقي فاطمة", "section_name": "3أف2"},
     {"fullname": "نوقعة لميس", "section_name": "3أف2"},
-   {"fullname": "وعمارة ريان", "section_name": "3أف2"},
-    
+    {"fullname": "وعمارة ريان", "section_name": "3أف2"},
+
     # --- قسم 3لغ (إسبانية) ---
     {"fullname": "أحمد بلاحة زينب", "section_name": "3لغ (إسبانية)"}, {"fullname": "الشرقى محمد عماد الدين", "section_name": "3لغ (إسبانية)"},
     {"fullname": "بختاوي ريمة", "section_name": "3لغ (إسبانية)"}, {"fullname": "بن مقداد سولاف", "section_name": "3لغ (إسبانية)"},
@@ -520,7 +521,7 @@ DEFAULT_STUDENTS = [
     {"fullname": "قليل حسام الدين", "section_name": "3ع ت2"}, {"fullname": "مصابيح ياسر", "section_name": "3ع ت2"},
     {"fullname": "مقداد يوسف", "section_name": "3ع ت2"}, {"fullname": "يحي لقمان", "section_name": "3ع ت2"},
 
-   # --- قسم 3تق ---
+    # --- قسم 3تق ---
     {"fullname": "بطيشة محمد", "section_name": "3تق"},
     {"fullname": "بلعاطى مختارية", "section_name": "3تق"},
     {"fullname": "بلعيدي فاطمة", "section_name": "3تق"},
@@ -530,10 +531,10 @@ DEFAULT_STUDENTS = [
     {"fullname": "بوعزة سندس", "section_name": "3تق"},
     {"fullname": "تامدة شيماء", "section_name": "3تق"},
     {"fullname": "تقار دعاء", "section_name": "3تق"},
-    {"fullname": "تومی إسحاق مسعود أحمد", "section_name": "3تق"},
+    {"fullname": "تومى إسحاق مسعود أحمد", "section_name": "3تق"},
     {"fullname": "جعفري ملاك", "section_name": "3تق"},
     {"fullname": "جلول عبد الاله اسلام", "section_name": "3تق"},
-    {"fullname": "حرتال عاشورية دعاء", "section_name": "3تق"},
+    {"fullname": "حرطال عاشورية دعاء", "section_name": "3تق"},
     {"fullname": "رابح سمية", "section_name": "3تق"},
     {"fullname": "زيان يونس اسلام", "section_name": "3تق"},
     {"fullname": "زيري نسرين", "section_name": "3تق"},
@@ -542,7 +543,7 @@ DEFAULT_STUDENTS = [
     {"fullname": "سى مرابط أمال", "section_name": "3تق"},
     {"fullname": "شكور يوسف", "section_name": "3تق"},
     {"fullname": "صرصار أحمد مجيب الرحمان", "section_name": "3تق"},
-    {"fullname": "عبوشي لخضر", "section_name": "3تق"},
+    {"fullname": "عبوشى لخضر", "section_name": "3تق"},
     {"fullname": "عتو ميلود ياسين", "section_name": "3تق"},
     {"fullname": "عرابة محمد ربيع", "section_name": "3تق"},
     {"fullname": "عطا الله مريم", "section_name": "3تق"},
@@ -552,9 +553,9 @@ DEFAULT_STUDENTS = [
     {"fullname": "قليل حسام الدين", "section_name": "3تق"},
     {"fullname": "مصابيح ياسر", "section_name": "3تق"},
     {"fullname": "مقداد يوسف", "section_name": "3تق"},
-    {"fullname": "يحي لقمان", "section_name": "3تق"},
+    {"fullname": "ياحي لقمان", "section_name": "3تق"},
 
-# --- قسم 3ريا ---
+    # --- قسم 3ريا ---
     {"fullname": "بلميلود منال", "section_name": "3ريا"},
     {"fullname": "بوسيف أكرم سليمان", "section_name": "3ريا"},
     {"fullname": "حجار عبد الرحمن", "section_name": "3ريا"},
@@ -568,7 +569,7 @@ DEFAULT_STUDENTS = [
     {"fullname": "قليل عصام الدين", "section_name": "3ريا"},
     {"fullname": "منقور منال", "section_name": "3ريا"},
 
-# --- قسم 3تر (هـ ك) ---
+    # --- قسم 3تر (هـ ك) ---
     {"fullname": "بغداد تسنيم", "section_name": "3تر (هـ ك)"},
     {"fullname": "بلزرق إياد محمد أمين", "section_name": "3تر (هـ ك)"},
     {"fullname": "بلعوينات عبد الرزاق", "section_name": "3تر (هـ ك)"},
@@ -596,7 +597,7 @@ DEFAULT_STUDENTS = [
     {"fullname": "غوال رميساء", "section_name": "3تر (هـ م)"},
     {"fullname": "لزرق هبة", "section_name": "3تر (هـ م)"},
 ]
-
+    
 # تهيئة قاعدة البيانات والتلاميذ الافتراضيين
 with app.app_context():
     db.create_all()
