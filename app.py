@@ -1169,6 +1169,14 @@ from werkzeug.security import generate_password_hash
 
 app = Flask(__name__)
 
+import json
+import os
+from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash
+
+app = Flask(__name__)
+
 # استخدام قاعدة بيانات دائمة عبر DATABASE_URL عند توفرها، مع الاحتفاظ بمسار SQLite محلي كبديل
 database_url = os.environ.get("DATABASE_URL", "sqlite:///philo_school.db")
 if database_url.startswith("postgres://"):
@@ -1217,6 +1225,11 @@ with app.app_context():
     db.create_all()
 
 
+@app.route("/")
+def index():
+    return redirect(url_for("register"))
+
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
@@ -1258,6 +1271,11 @@ def register():
         return redirect(url_for("register"))
 
     return render_template("register.html", roles=ROLES, sections=OFFICIAL_SECTIONS)
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
