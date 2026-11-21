@@ -664,6 +664,11 @@ LOGIN_TEMPLATE = """
                 دخول إلى لوحة التحكم
             </button>
         </form>
+
+        <div class="mt-4 pt-3 border-t flex justify-between items-center text-xs font-semibold">
+            <a href="{{ url_for('register_account') }}" class="text-blue-700 hover:underline">تسجيل حساب جديد</a>
+            <a href="{{ url_for('recover_account') }}" class="text-amber-700 hover:underline">استعادة الحساب</a>
+        </div>
     </div>
 </body>
 </html>
