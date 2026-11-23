@@ -1,6 +1,6 @@
 # ==============================================================================
 # منصة تسيير المؤسسة - ثانوية الشهيد قوديد أحمد (سيدي الشحمي)
-# الكود المتكامل والموحّد (تلاميذ وأقسام وحسابات مدمجة)
+# الكود المتكامل والموحّد مع ترقية الجداول تلقائياً وفحص اتصال قاعدة البيانات
 # ==============================================================================
 
 import json
@@ -18,6 +18,7 @@ from flask import (
     session,
 )
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -27,14 +28,19 @@ app.secret_key = os.environ.get(
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 database_url = os.environ.get("DATABASE_URL", "").strip()
+
 if database_url:
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
     app.config["SQLALCHEMY_DATABASE_URI"] = database_url
+    DB_MODE_LABEL = "متصل بقاعدة بيانات دائمة (PostgreSQL)"
+    IS_PERSISTENT_DB = True
 else:
     app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(
         basedir, "philo_school_manager.db"
     )
+    DB_MODE_LABEL = "تنبيه: يعمل حالياً على قاعدة محلية مؤقتة (SQLite) — أضف DATABASE_URL في Render"
+    IS_PERSISTENT_DB = False
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
@@ -71,7 +77,11 @@ class User(db.Model):
         self.password_hash = generate_password_hash(raw_password)
 
     def verify_password(self, raw_password):
-        return check_password_hash(self.password_hash, raw_password)
+        if not self.password_hash:
+            return False
+        if self.password_hash.startswith(("pbkdf2:", "scrypt:")):
+            return check_password_hash(self.password_hash, raw_password)
+        return self.password_hash == raw_password
 
     @property
     def sections(self):
@@ -141,7 +151,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مرين رؤية", "section_name": "1أ1"}, {"fullname": "مرين عمر", "section_name": "1أ1"},
     {"fullname": "مكاب ياسين محمد سالم", "section_name": "1أ1"}, {"fullname": "مناع حمزة", "section_name": "1أ1"},
     {"fullname": "مهدي أسماء", "section_name": "1أ1"}, {"fullname": "ناصر شرقي حسن حسين", "section_name": "1أ1"},
-
     {"fullname": "بخدة إسراء", "section_name": "1أ2"}, {"fullname": "برحمون سناء", "section_name": "1أ2"},
     {"fullname": "بلغربي إسراء", "section_name": "1أ2"}, {"fullname": "بن دادة ملاك", "section_name": "1أ2"},
     {"fullname": "بن عطية فاطمة", "section_name": "1أ2"}, {"fullname": "بن علال عبد الله اسلام", "section_name": "1أ2"},
@@ -164,7 +173,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "موزاع دلين", "section_name": "1أ2"}, {"fullname": "ناصر الشرقي مصطفى", "section_name": "1أ2"},
     {"fullname": "ناصر شرقي ميلود", "section_name": "1أ2"}, {"fullname": "نباتي شرقي شيماء", "section_name": "1أ2"},
     {"fullname": "وانس مشكور سرين", "section_name": "1أ2"},
-
     {"fullname": "بداوي أسيا", "section_name": "1أ3"}, {"fullname": "بركليت رحيل", "section_name": "1أ3"},
     {"fullname": "بلبية أمال", "section_name": "1أ3"}, {"fullname": "بلعابد بشرى", "section_name": "1أ3"},
     {"fullname": "بلعربي كوثر", "section_name": "1أ3"}, {"fullname": "بلكحلة أحمد", "section_name": "1أ3"},
@@ -187,7 +195,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مزيود انس", "section_name": "1أ3"}, {"fullname": "معيطى رتاج", "section_name": "1أ3"},
     {"fullname": "مملوك ربيعة", "section_name": "1أ3"}, {"fullname": "مواز دعاء", "section_name": "1أ3"},
     {"fullname": "نباتى شرقى شيراز", "section_name": "1أ3"},
-
     {"fullname": "ابراهيم مفلاح اسلام", "section_name": "1ع1"}, {"fullname": "اليوبي هبة الرحمان", "section_name": "1ع1"},
     {"fullname": "بحوصي محمد العدنان", "section_name": "1ع1"}, {"fullname": "برفاس وصال", "section_name": "1ع1"},
     {"fullname": "بلحبيب بشري", "section_name": "1ع1"}, {"fullname": "بلعباس مصطفى عبد الرحمان", "section_name": "1ع1"},
@@ -204,7 +211,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "قيروان دعاء", "section_name": "1ع1"}, {"fullname": "كروم محمد علال", "section_name": "1ع1"},
     {"fullname": "مصالح انس", "section_name": "1ع1"}, {"fullname": "مغربي نور الهدى", "section_name": "1ع1"},
     {"fullname": "نباتى شرقى ملاك", "section_name": "1ع1"}, {"fullname": "هبري إسمهان رميسة", "section_name": "1ع1"},
-
     {"fullname": "اوجيت ملاك", "section_name": "1ع2"}, {"fullname": "أوراغى عبد الجليل", "section_name": "1ع2"},
     {"fullname": "بلهاشمي كوثر", "section_name": "1ع2"}, {"fullname": "بن دحو آية", "section_name": "1ع2"},
     {"fullname": "بن عبد الله عبد المالك خالد", "section_name": "1ع2"}, {"fullname": "بن عيشوش ياسين", "section_name": "1ع2"},
@@ -222,7 +228,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مصابيح ادم علی", "section_name": "1ع2"}, {"fullname": "معطى الله شمس الضحى", "section_name": "1ع2"},
     {"fullname": "نصر الدين منال", "section_name": "1ع2"}, {"fullname": "هادف حفصة", "section_name": "1ع2"},
     {"fullname": "يرو رانيا", "section_name": "1ع2"},
-
     {"fullname": "الشرقى ذكرى فاطمة", "section_name": "1ع3"}, {"fullname": "بعلة ألاء سندس", "section_name": "1ع3"},
     {"fullname": "بقدور عبد الكافي مروان", "section_name": "1ع3"}, {"fullname": "بلعزيز عبد الرحمان", "section_name": "1ع3"},
     {"fullname": "بلميلود أمال فاطمة", "section_name": "1ع3"}, {"fullname": "بلهاشمى رضوان", "section_name": "1ع3"},
@@ -241,7 +246,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مشري بوبكر", "section_name": "1ع3"}, {"fullname": "مصابيح فاطمة الزهراء", "section_name": "1ع3"},
     {"fullname": "مغربي عائشة", "section_name": "1ع3"}, {"fullname": "موفق ملاك", "section_name": "1ع3"},
     {"fullname": "ناجي كوثر اسراء", "section_name": "1ع3"}, {"fullname": "نباتى شرقى حاجة فاطمة", "section_name": "1ع3"},
-
     {"fullname": "احمد بلاحة احمد", "section_name": "1ع4"}, {"fullname": "اوشعبان ملاك", "section_name": "1ع4"},
     {"fullname": "برداية صافية", "section_name": "1ع4"}, {"fullname": "بشير هناء", "section_name": "1ع4"},
     {"fullname": "بكييري عبد القادر", "section_name": "1ع4"}, {"fullname": "بلعباس أيوب", "section_name": "1ع4"},
@@ -261,7 +265,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "فيدوح سارة", "section_name": "1ع4"}, {"fullname": "قادة بن عثمان هبة الرحمان", "section_name": "1ع4"},
     {"fullname": "لژغم محمد أمين", "section_name": "1ع4"}, {"fullname": "ميمون عامر", "section_name": "1ع4"},
     {"fullname": "يحي صفوان", "section_name": "1ع4"},
-
     {"fullname": "بلحبيب نسرين", "section_name": "1ع5"}, {"fullname": "بلخير إلياس", "section_name": "1ع5"},
     {"fullname": "بلعباس فاطمة الزهراء", "section_name": "1ع5"}, {"fullname": "بلقاضى عبد النور", "section_name": "1ع5"},
     {"fullname": "بلهوان محمد عبد الغانی", "section_name": "1ع5"}, {"fullname": "بن طالب شيماء", "section_name": "1ع5"},
@@ -280,7 +283,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "قنيش مختار", "section_name": "1ع5"}, {"fullname": "مدانی فواتيح عتيقة", "section_name": "1ع5"},
     {"fullname": "مغربی محمد صديق", "section_name": "1ع5"}, {"fullname": "منصور دعاء", "section_name": "1ع5"},
     {"fullname": "مهنى محمد عبد الرحمان", "section_name": "1ع5"}, {"fullname": "نباتى شرقي عبد الوهاب", "section_name": "1ع5"},
-
     {"fullname": "ابراهيم فواتيح على نصر الله", "section_name": "1ع6"}, {"fullname": "الغريسي مليكة", "section_name": "1ع6"},
     {"fullname": "أوجالی فارس", "section_name": "1ع6"}, {"fullname": "أوسيف أشرف محمد الأمين", "section_name": "1ع6"},
     {"fullname": "بدة رانية", "section_name": "1ع6"}, {"fullname": "بشير نور الهدى", "section_name": "1ع6"},
@@ -300,7 +302,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مقدم جلال", "section_name": "1ع6"}, {"fullname": "مكى اكرام فاطمة", "section_name": "1ع6"},
     {"fullname": "موساوي وجدان", "section_name": "1ع6"}, {"fullname": "ميموني ألاء", "section_name": "1ع6"},
     {"fullname": "نباتى شرقى زهرة حليمة", "section_name": "1ع6"}, {"fullname": "يخو عبد القادر سيف الدين", "section_name": "1ع6"},
-
     {"fullname": "بخدة محمد ريان", "section_name": "2أف1"}, {"fullname": "بريشي عبد الاله", "section_name": "2أف1"},
     {"fullname": "بلهوان رميساء", "section_name": "2أف1"}, {"fullname": "بلولو ميلود", "section_name": "2أف1"},
     {"fullname": "بن زايد عبدالجليل", "section_name": "2أف1"}, {"fullname": "بن شراير أميمة", "section_name": "2أف1"},
@@ -318,7 +319,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "قاضى فضيلة", "section_name": "2أف1"}, {"fullname": "قرنة لينا حنين", "section_name": "2أف1"},
     {"fullname": "كرايي فاطمة", "section_name": "2أف1"}, {"fullname": "لبيض مختارية", "section_name": "2أف1"},
     {"fullname": "مزاري إسماعيل", "section_name": "2أف1"}, {"fullname": "معروف يحياوي زهرة", "section_name": "2أف1"},
-
     {"fullname": "بلجيلالى مختارية", "section_name": "2أف2"}, {"fullname": "بلغربي سرين سعدية", "section_name": "2أف2"},
     {"fullname": "بلهاشمى رياض", "section_name": "2أف2"}, {"fullname": "بن عبيد منور", "section_name": "2أف2"},
     {"fullname": "بن عمر كوثر", "section_name": "2أف2"}, {"fullname": "بو لنوار مصطفى عبد الرزاق", "section_name": "2أف2"},
@@ -337,7 +337,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مصاحب سيد أحمد", "section_name": "2أف2"}, {"fullname": "ملاح العيد", "section_name": "2أف2"},
     {"fullname": "مونسی صابرين", "section_name": "2أف2"}, {"fullname": "ميلوى فتيحة", "section_name": "2أف2"},
     {"fullname": "نايري جميلة", "section_name": "2أف2"},
-
     {"fullname": "اوعيل نصيرة", "section_name": "2لغ"}, {"fullname": "بلعباس هبة", "section_name": "2لغ"},
     {"fullname": "بن حمر العين فراح مريم", "section_name": "2لغ"}, {"fullname": "بن عياد فاطمة الزهراء", "section_name": "2لغ"},
     {"fullname": "بوترعة فراح", "section_name": "2لغ"}, {"fullname": "بوحريرة محمد عثمان", "section_name": "2لغ"},
@@ -356,7 +355,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "راشم شيماء", "section_name": "2لغ"}, {"fullname": "روام سريك فاطمة الزهراء", "section_name": "2لغ"},
     {"fullname": "زلاط ياسمين", "section_name": "2لغ"}, {"fullname": "فغول أدم", "section_name": "2لغ"},
     {"fullname": "فقيرة سلسبيل", "section_name": "2لغ"}, {"fullname": "مراح محمد عادل", "section_name": "2لغ"},
-
     {"fullname": "أوجيت شهيناز", "section_name": "2ع ت1"}, {"fullname": "بلغوتي ملاك", "section_name": "2ع ت1"},
     {"fullname": "بلميلود مروة", "section_name": "2ع ت1"}, {"fullname": "بن زهرة شهيناز", "section_name": "2ع ت1"},
     {"fullname": "بن زهرة محمد الامين", "section_name": "2ع ت1"}, {"fullname": "بوسيف وسام", "section_name": "2ع ت1"},
@@ -377,7 +375,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "لحدير عبد الرحمان", "section_name": "2ع ت1"}, {"fullname": "لرجم إكرام كوثر", "section_name": "2ع ت1"},
     {"fullname": "مصطفى عبد الرحيم", "section_name": "2ع ت1"}, {"fullname": "معروف يحياوي خديجة", "section_name": "2ع ت1"},
     {"fullname": "مغوفل فاطمة الزهراء", "section_name": "2ع ت1"},
-
     {"fullname": "بلبح سارة", "section_name": "2ع ت2"}, {"fullname": "بلعيدي عبد الإله", "section_name": "2ع ت2"},
     {"fullname": "بن بلال عبد الجليل", "section_name": "2ع ت2"}, {"fullname": "بن زايد محمد أمين", "section_name": "2ع ت2"},
     {"fullname": "بن عودة شحط مهدي", "section_name": "2ع ت2"}, {"fullname": "بن نوار عبد العزيز", "section_name": "2ع ت2"},
@@ -398,7 +395,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مسلم مروى", "section_name": "2ع ت2"}, {"fullname": "نومية عبد الله", "section_name": "2ع ت2"},
     {"fullname": "هواري الياس", "section_name": "2ع ت2"}, {"fullname": "واحمانی عصام الدين", "section_name": "2ع ت2"},
     {"fullname": "وليد جميلة", "section_name": "2ع ت2"}, {"fullname": "يطو دعاء", "section_name": "2ع ت2"},
-
     {"fullname": "بختى ايمن", "section_name": "2تق"}, {"fullname": "بركليت حنان", "section_name": "2تق"},
     {"fullname": "بشير عبد الإله", "section_name": "2تق"}, {"fullname": "بلعباس آية", "section_name": "2تق"},
     {"fullname": "بلهواري بشرى", "section_name": "2تق"}, {"fullname": "بوتنزار عبدالقادر", "section_name": "2تق"},
@@ -414,29 +410,24 @@ DEFAULT_STUDENTS = [
     {"fullname": "كرطالى ياسين", "section_name": "2تق"}, {"fullname": "لوشنى سندس", "section_name": "2تق"},
     {"fullname": "مزغرانى عادل", "section_name": "2تق"}, {"fullname": "موساوي محمد صهيب", "section_name": "2تق"},
     {"fullname": "يطو ايمان", "section_name": "2تق"},
-
     {"fullname": "بكة ريتاج", "section_name": "2ريا"}, {"fullname": "بن عبورة جنة الايمان", "section_name": "2ريا"},
     {"fullname": "بوتين نرجس جوهر", "section_name": "2ريا"}, {"fullname": "سعد هواري ياسين", "section_name": "2ريا"},
     {"fullname": "صحراوي صفاء", "section_name": "2ريا"}, {"fullname": "كاعوش عائشة", "section_name": "2ريا"},
     {"fullname": "لحمر ايناس اميرة سندس", "section_name": "2ريا"}, {"fullname": "مقداد إكرام", "section_name": "2ريا"},
-
     {"fullname": "بن زهرة عبد المعز", "section_name": "2تر (هـ ط)"}, {"fullname": "سنحين إكرام", "section_name": "2تر (هـ ط)"},
     {"fullname": "عرابي بسملة", "section_name": "2تر (هـ ط)"}, {"fullname": "لعموري عائشة", "section_name": "2تر (هـ ط)"},
     {"fullname": "مشتی اسراء", "section_name": "2تر (هـ ط)"}, {"fullname": "مهون عبد الاله", "section_name": "2تر (هـ ط)"},
-
     {"fullname": "باوية محمدإحسان", "section_name": "2تر (هـ ك)"}, {"fullname": "بن زينب محمد", "section_name": "2تر (هـ ك)"},
     {"fullname": "بن عائشة فاطمة الزهراء", "section_name": "2تر (هـ ك)"}, {"fullname": "بن علو محمد رياض", "section_name": "2تر (هـ ك)"},
     {"fullname": "بوسيف منال سعدية", "section_name": "2تر (هـ ك)"}, {"fullname": "حسين سارة", "section_name": "2تر (هـ ك)"},
     {"fullname": "زيري رحاب", "section_name": "2تر (هـ ك)"}, {"fullname": "سعادي أنس عبد الرحمان", "section_name": "2تر (هـ ك)"},
     {"fullname": "سعادي ميساء", "section_name": "2تر (هـ ك)"}, {"fullname": "طيفور عزيزة", "section_name": "2تر (هـ ك)"},
     {"fullname": "كرطالى هند", "section_name": "2تر (هـ ك)"},
-
     {"fullname": "بن سعادة ماريا", "section_name": "2تر (هـ م)"}, {"fullname": "بن عائشة هاجر", "section_name": "2تر (هـ م)"},
     {"fullname": "بوزيدي نور الهدى ليليا", "section_name": "2تر (هـ م)"}, {"fullname": "بوسيف عبد الله", "section_name": "2تر (هـ م)"},
     {"fullname": "تلى آية", "section_name": "2تر (هـ م)"}, {"fullname": "خير الدين عبد الهادي يحيى", "section_name": "2تر (هـ م)"},
     {"fullname": "سى فضيل عبد النور", "section_name": "2تر (هـ م)"}, {"fullname": "قرشى هديل", "section_name": "2تر (هـ م)"},
     {"fullname": "مداح بشرى", "section_name": "2تر (هـ م)"}, {"fullname": "نوال ريهام سندس", "section_name": "2تر (هـ م)"},
-
     {"fullname": "بلهزيل نور الهدى", "section_name": "3أف1"}, {"fullname": "بن زهرة آية", "section_name": "3أف1"},
     {"fullname": "بن عودة ياسين", "section_name": "3أف1"}, {"fullname": "بن يعقوب مريم", "section_name": "3أف1"},
     {"fullname": "بن يوس عومرية", "section_name": "3أف1"}, {"fullname": "بوخاري خضرة فدوى", "section_name": "3أف1"},
@@ -452,7 +443,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "قرنة صورية", "section_name": "3أف1"}, {"fullname": "لحسن محمد امين", "section_name": "3أف1"},
     {"fullname": "مختاري فضيلة", "section_name": "3أف1"}, {"fullname": "مداح روبة", "section_name": "3أف1"},
     {"fullname": "مزيان نور الإيمان", "section_name": "3أف1"}, {"fullname": "مسعودي يوسف رزق الله", "section_name": "3أف1"},
-
     {"fullname": "العقون حسناء", "section_name": "3أف2"}, {"fullname": "براهيمي بسملة", "section_name": "3أف2"},
     {"fullname": "بلعوني ابتهال وداد", "section_name": "3أف2"}, {"fullname": "بن عمر صليحة", "section_name": "3أف2"},
     {"fullname": "بودية الياس", "section_name": "3أف2"}, {"fullname": "بوعجامة دعاء", "section_name": "3أف2"},
@@ -470,7 +460,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "ناصر الشرقي دنيا", "section_name": "3أف2"}, {"fullname": "ناصر الشرقي امين", "section_name": "3أف2"},
     {"fullname": "ناصر الشرقي فاطمة", "section_name": "3أف2"}, {"fullname": "نوقعة لميس", "section_name": "3أف2"},
     {"fullname": "وعمارة ريان", "section_name": "3أف2"},
-
     {"fullname": "أحمد بلاحة زينب", "section_name": "3لغ (إسبانية)"}, {"fullname": "الشرقى محمد عماد الدين", "section_name": "3لغ (إسبانية)"},
     {"fullname": "بختاوي ريمة", "section_name": "3لغ (إسبانية)"}, {"fullname": "بن مقداد سولاف", "section_name": "3لغ (إسبانية)"},
     {"fullname": "بو عبد الله نسرين", "section_name": "3لغ (إسبانية)"}, {"fullname": "بوجراف مروى", "section_name": "3لغ (إسبانية)"},
@@ -485,13 +474,11 @@ DEFAULT_STUDENTS = [
     {"fullname": "كتاب شيماء", "section_name": "3لغ (إسبانية)"}, {"fullname": "مشري مختارية", "section_name": "3لغ (إسبانية)"},
     {"fullname": "مصابيح إسراء", "section_name": "3لغ (إسبانية)"}, {"fullname": "مقدم بحوص فاروق", "section_name": "3لغ (إسبانية)"},
     {"fullname": "نباتى شرقي فريال", "section_name": "3لغ (إسبانية)"}, {"fullname": "يوكلف يسرى", "section_name": "3لغ (إسبانية)"},
-
     {"fullname": "بخدة هبة الرحمن", "section_name": "3لغ (ألمانية)"}, {"fullname": "بن سالم دعاء", "section_name": "3لغ (ألمانية)"},
     {"fullname": "بوشنتوف نسرين بدرة", "section_name": "3لغ (ألمانية)"}, {"fullname": "جعييد يمينة ملاك", "section_name": "3لغ (ألمانية)"},
     {"fullname": "راشم آدم", "section_name": "3لغ (ألمانية)"}, {"fullname": "سريج سارة", "section_name": "3لغ (ألمانية)"},
     {"fullname": "صور رودينة جيداء", "section_name": "3لغ (ألمانية)"}, {"fullname": "طويل مروى", "section_name": "3لغ (ألمانية)"},
     {"fullname": "عبو عبد المالك", "section_name": "3لغ (ألمانية)"},
-
     {"fullname": "بحيرة اسراء تسنيم", "section_name": "3ع ت1"}, {"fullname": "بشحط يسرى", "section_name": "3ع ت1"},
     {"fullname": "بلزرق رميساء", "section_name": "3ع ت1"}, {"fullname": "بلعيدي آية", "section_name": "3ع ت1"},
     {"fullname": "بن سعيد تسنيم", "section_name": "3ع ت1"}, {"fullname": "بن سعيد يوسف", "section_name": "3ع ت1"},
@@ -514,7 +501,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "مخيسي حليمة", "section_name": "3ع ت1"}, {"fullname": "مرحوم عبدالرحمان", "section_name": "3ع ت1"},
     {"fullname": "مقدم إكرام", "section_name": "3ع ت1"}, {"fullname": "نباتي الشرقي ايمان", "section_name": "3ع ت1"},
     {"fullname": "نباتي شرقي شيماء", "section_name": "3ع ت1"}, {"fullname": "نومية سهام حميدة", "section_name": "3ع ت1"},
-
     {"fullname": "العربي اخلاص", "section_name": "3ع ت2"}, {"fullname": "اليوبي إسراء إلهام", "section_name": "3ع ت2"},
     {"fullname": "بركاني عبد المالك", "section_name": "3ع ت2"}, {"fullname": "بلحميدي خولة", "section_name": "3ع ت2"},
     {"fullname": "بلمختار سناء", "section_name": "3ع ت2"}, {"fullname": "بلميلود أية", "section_name": "3ع ت2"},
@@ -537,7 +523,6 @@ DEFAULT_STUDENTS = [
     {"fullname": "لمقدم اسراء", "section_name": "3ع ت2"}, {"fullname": "مولوج دحو محمد", "section_name": "3ع ت2"},
     {"fullname": "ناصر شرقي ادم محمد", "section_name": "3ع ت2"}, {"fullname": "ولد سليمان مروان", "section_name": "3ع ت2"},
     {"fullname": "يطو ياسين", "section_name": "3ع ت2"},
-
     {"fullname": "بطيشة محمد", "section_name": "3تق"}, {"fullname": "بلعاطى مختارية", "section_name": "3تق"},
     {"fullname": "بلعيدي فاطمة", "section_name": "3تق"}, {"fullname": "بلميلود دعاء", "section_name": "3تق"},
     {"fullname": "بن سعيد نور الهدى", "section_name": "3تق"}, {"fullname": "بن يوب نجاة", "section_name": "3تق"},
@@ -554,20 +539,17 @@ DEFAULT_STUDENTS = [
     {"fullname": "قادري يوسف", "section_name": "3تق"}, {"fullname": "قليل مروى", "section_name": "3تق"},
     {"fullname": "قليل حسام الدين", "section_name": "3تق"}, {"fullname": "مصابيح ياسر", "section_name": "3تق"},
     {"fullname": "مقداد يوسف", "section_name": "3تق"}, {"fullname": "ياحي لقمان", "section_name": "3تق"},
-
     {"fullname": "بلميلود منال", "section_name": "3ريا"}, {"fullname": "بوسيف أكرم سليمان", "section_name": "3ريا"},
     {"fullname": "حجار عبد الرحمن", "section_name": "3ريا"}, {"fullname": "خليفي أميمة", "section_name": "3ريا"},
     {"fullname": "سبع شهيناز", "section_name": "3ريا"}, {"fullname": "شبوب نسرين", "section_name": "3ريا"},
     {"fullname": "شلقوم أشواق ليلى", "section_name": "3ريا"}, {"fullname": "صابر أسامة", "section_name": "3ريا"},
     {"fullname": "عامر محلى عثمان", "section_name": "3ريا"}, {"fullname": "غريسى هاجر منال", "section_name": "3ريا"},
     {"fullname": "قليل عصام الدين", "section_name": "3ريا"}, {"fullname": "منقور منال", "section_name": "3ريا"},
-
     {"fullname": "بغداد تسنيم", "section_name": "3تر (هـ ك)"}, {"fullname": "بلزرق إياد محمد أمين", "section_name": "3تر (هـ ك)"},
     {"fullname": "بلعوينات عبد الرزاق", "section_name": "3تر (هـ ك)"}, {"fullname": "بوجمعة محمد ياسين", "section_name": "3تر (هـ ك)"},
     {"fullname": "بوزيدي محمد", "section_name": "3تر (هـ ك)"}, {"fullname": "بوشتة وهيبة", "section_name": "3تر (هـ ك)"},
     {"fullname": "بوعقل عبد المجيد", "section_name": "3تر (هـ ك)"}, {"fullname": "مصالح محمد صهيب", "section_name": "3تر (هـ ك)"},
     {"fullname": "نجادي امينة نور الهدى", "section_name": "3تر (هـ ك)"},
-
     {"fullname": "بلعباس لينة", "section_name": "3تر (هـ م)"}, {"fullname": "بلميلود أمال", "section_name": "3تر (هـ م)"},
     {"fullname": "بلهاشمي مصطفى", "section_name": "3تر (هـ م)"}, {"fullname": "بن زينب يوسف", "section_name": "3تر (هـ م)"},
     {"fullname": "بوترعة اية الرحمان", "section_name": "3تر (هـ م)"}, {"fullname": "حسين عبد الغنى", "section_name": "3تر (هـ م)"},
@@ -579,8 +561,25 @@ DEFAULT_STUDENTS = [
 ]
 
 
+def ensure_user_columns():
+    """ترقية جدول user تلقائياً إذا كان منشأً مسبقاً بعمود قديم."""
+    inspector = inspect(db.engine)
+    if "user" not in inspector.get_table_names():
+        return
+    existing_cols = {col["name"] for col in inspector.get_columns("user")}
+    with db.engine.begin() as conn:
+        if "password_hash" not in existing_cols:
+            conn.execute(text('ALTER TABLE "user" ADD COLUMN password_hash VARCHAR(255)'))
+            if "password" in existing_cols:
+                conn.execute(text('UPDATE "user" SET password_hash = password WHERE password_hash IS NULL'))
+        if "sections_json" not in existing_cols:
+            conn.execute(text("ALTER TABLE \"user\" ADD COLUMN sections_json TEXT DEFAULT '[]'"))
+
+
 def init_database():
     db.create_all()
+    ensure_user_columns()
+
     if not User.query.first():
         db.session.add_all([
             User(username="director", password="123456", role="director", fullname="السيد المدير"),
@@ -627,6 +626,7 @@ def redirect_by_role(role):
         return redirect(url_for("deputy_dashboard_view"))
     return redirect(url_for("home"))
 
+
 # ==============================================================================
 # واجهات HTML والمسارات
 # ==============================================================================
@@ -644,6 +644,9 @@ LOGIN_TEMPLATE = """
 </head>
 <body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
     <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
+        <div class="mb-4 p-2.5 rounded-lg text-[11px] font-bold text-center border {% if is_persistent_db %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-amber-50 text-amber-800 border-amber-300{% endif %}">
+            {{ db_mode_label }}
+        </div>
         <div class="text-center mb-6">
             <h1 class="text-xl font-bold text-gray-800">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</h1>
             <p class="text-sm text-blue-600 font-semibold mt-1">منصة تسيير المؤسسة التربوية</p>
@@ -839,7 +842,11 @@ RECOVER_PAGE_HTML = """
 def home():
     if "username" in session and "role" in session:
         return redirect_by_role(session.get("role"))
-    return render_template_string(LOGIN_TEMPLATE)
+    return render_template_string(
+        LOGIN_TEMPLATE,
+        db_mode_label=DB_MODE_LABEL,
+        is_persistent_db=IS_PERSISTENT_DB,
+    )
 
 
 @app.route("/login", methods=["POST"])
@@ -851,7 +858,10 @@ def login():
     user = User.query.filter_by(username=username).first()
     if not user or not user.verify_password(password) or user.role != role:
         return render_template_string(
-            LOGIN_TEMPLATE, message="بيانات الدخول غير صحيحة!"
+            LOGIN_TEMPLATE,
+            message="بيانات الدخول غير صحيحة!",
+            db_mode_label=DB_MODE_LABEL,
+            is_persistent_db=IS_PERSISTENT_DB,
         )
 
     session["username"] = user.username
@@ -888,28 +898,33 @@ def register_account():
             flash("اسم المستخدم مستعمل مسبقاً، يرجى اختيار اسم آخر.", "danger")
             return redirect(url_for("register_account"))
 
-        new_user = User(
-            username=username,
-            password=password,
-            role=role,
-            fullname=fullname,
-        )
-        new_user.sections = selected_sections
-        db.session.add(new_user)
+        try:
+            new_user = User(
+                username=username,
+                password=password,
+                role=role,
+                fullname=fullname,
+            )
+            new_user.sections = selected_sections
+            db.session.add(new_user)
 
-        for sec in selected_sections:
-            if not TeacherSection.query.filter_by(
-                teacher_username=username, section_name=sec
-            ).first():
-                db.session.add(
-                    TeacherSection(teacher_username=username, section_name=sec)
-                )
+            for sec in selected_sections:
+                if not TeacherSection.query.filter_by(
+                    teacher_username=username, section_name=sec
+                ).first():
+                    db.session.add(
+                        TeacherSection(teacher_username=username, section_name=sec)
+                    )
 
-        db.session.commit()
-        flash(
-            f"تم إنشاء الحساب ({username}) بنجاح. يمكنك الآن تسجيل الدخول.",
-            "success",
-        )
+            db.session.commit()
+            flash(
+                f"تم إنشاء الحساب ({username}) وحفظه بنجاح. يمكنك الآن تسجيل الدخول.",
+                "success",
+            )
+        except Exception as e:
+            db.session.rollback()
+            flash(f"تعذر حفظ الحساب في قاعدة البيانات: {e}", "danger")
+
         return redirect(url_for("register_account"))
 
     return render_template_string(REGISTER_PAGE_HTML, sections=OFFICIAL_SECTIONS)
@@ -948,9 +963,6 @@ def recover_account():
 
     return render_template_string(RECOVER_PAGE_HTML)
 
-# ==============================================================================
-# لوحة تحكم الأستاذ (اختيار الأقسام + المناداة + تسجيل الغيابات)
-# ==============================================================================
 
 @app.route("/teacher/dashboard-view")
 @login_required
@@ -1154,9 +1166,6 @@ def submit_lesson():
         db.session.commit()
     return redirect(url_for("teacher_dashboard_view", section=sec))
 
-# ==============================================================================
-# لوحات الإدارة الأخرى
-# ==============================================================================
 
 @app.route("/counselor/dashboard-view")
 @login_required
