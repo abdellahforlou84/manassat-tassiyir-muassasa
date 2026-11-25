@@ -1080,12 +1080,9 @@ def teacher_dashboard_view():
     my_attendances = Attendance.query.filter_by(teacher_username=teacher_uname).all()
     my_lessons = LessonLog.query.filter_by(teacher_username=teacher_uname).all()
 
-    pending_att_count = sum(1 for a in my_attendances if a.approval_status == "pending")
-    pending_les_count = sum(1 for l in my_lessons if l.approval_status == "pending")
-    pending_total = pending_att_count + pending_les_count
-
-    approved_att_hours = sum(float(a.hours or 0) for a in my_attendances if a.approval_status == "approved")
-    approved_les_hours = sum(float(l.hours or 0) for l in my_lessons if l.approval_status == "approved")
+    sent_to_director_count = sum(1 for l in my_lessons if l.approved_by == "مرسل للمدير")
+    total_lesson_hours = sum(float(l.hours or 0) for l in my_lessons)
+    total_absent_hours = sum(float(a.hours or 0) for a in my_attendances)
 
     attendance_rows = "".join([f"""
     <tr class="border-b hover:bg-gray-50">
@@ -1098,7 +1095,7 @@ def teacher_dashboard_view():
                 <input type="hidden" name="date" value="{today_date}">
                 <input type="hidden" name="selected_section" value="{selected_section}">
                 <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" title="عدد الساعات" class="w-16 px-2 py-1 border rounded text-xs text-center font-bold">
-                <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">إرسال غياب للموافقة</button>
+                <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">تسجيل غياب (أستاذ + حارس عام)</button>
             </form>
         </td>
     </tr>
@@ -1118,11 +1115,14 @@ def teacher_dashboard_view():
             <td class='py-2 px-3 font-bold'>{format_hours(l.hours)} سا</td>
             <td class='py-2 px-3'>{l.date}</td>
             <td class='py-2 px-3'>
-                {"<span class='bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold'>معتمدة</span>" if l.approval_status == "approved" else ("<span class='bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold'>مرفوضة</span>" if l.approval_status == "rejected" else "<span class='bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold'>بانتظار موافقة الحارس العام</span>")}
+                {"<span class='bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-bold'>مُرسلة للمدير</span>" if l.approved_by == "مرسل للمدير" else "<span class='bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold'>مسجلة في دفتر النصوص</span>"}
+            </td>
+            <td class='py-2 px-3'>
+                {"<span class='text-indigo-700 font-bold'>تم الإرسال للمدير</span>" if l.approved_by == "مرسل للمدير" else f"<form action='/teacher/send-lesson-to-director/{l.id}' method='POST' class='inline'><button type='submit' class='bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded font-bold'>إرسال للمدير</button></form>"}
             </td>
         </tr>"""
         for l in reversed(my_lessons)
-    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لم تقم بإرسال أي حصة بعد.</td></tr>"
+    ]) or "<tr><td colspan='6' class='text-center py-4 text-gray-400 text-xs'>لم تقم بتسجيل أي حصة في دفتر النصوص بعد.</td></tr>"
 
     return f"""
     <html lang="ar" dir="rtl">
@@ -1144,17 +1144,17 @@ def teacher_dashboard_view():
                         <div class="text-[11px] font-bold text-blue-700">حجمي الساعي الفعلي</div>
                         <div class="text-base font-extrabold text-blue-950 mt-1">{hours_display}</div>
                     </div>
-                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-amber-800">حصص/غيابات بانتظار الموافقة</div>
-                        <div class="text-base font-extrabold text-amber-950 mt-1">{pending_total}</div>
-                    </div>
                     <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-emerald-700">ساعات الحصص المعتمدة</div>
-                        <div class="text-base font-extrabold text-emerald-950 mt-1">{format_hours(approved_les_hours)} سا</div>
+                        <div class="text-[11px] font-bold text-emerald-700">ساعات حصص دفتر النصوص</div>
+                        <div class="text-base font-extrabold text-emerald-950 mt-1">{format_hours(total_lesson_hours)} سا</div>
+                    </div>
+                    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-indigo-700">حصص مرسلة للمدير</div>
+                        <div class="text-base font-extrabold text-indigo-950 mt-1">{sent_to_director_count}</div>
                     </div>
                     <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-rose-700">ساعات الغياب المعتمدة</div>
-                        <div class="text-base font-extrabold text-rose-950 mt-1">{format_hours(approved_att_hours)} سا</div>
+                        <div class="text-[11px] font-bold text-rose-700">ساعات الغياب المسجلة</div>
+                        <div class="text-base font-extrabold text-rose-950 mt-1">{format_hours(total_absent_hours)} سا</div>
                     </div>
                 </div>
 
@@ -1186,7 +1186,7 @@ def teacher_dashboard_view():
 
                 <div class="bg-white rounded-2xl shadow-md p-5 md:col-span-2 space-y-4">
                     <div class="flex justify-between items-center border-b pb-2">
-                        <h3 class="text-md font-bold text-gray-800">قائمة المناداة للقسم المختار</h3>
+                        <h3 class="text-md font-bold text-gray-800">قائمة المناداة وتسجيل الغيابات</h3>
                         <form method="GET" action="/teacher/dashboard-view" class="flex gap-2">
                             <select name="section" onchange="this.form.submit()" class="px-3 py-1.5 rounded-lg border text-xs bg-white font-bold text-blue-800">
                                 <option value="" disabled selected>-- اختر القسم للمناداة --</option>
@@ -1205,7 +1205,7 @@ def teacher_dashboard_view():
 
             <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
                 <div>
-                    <h3 class="text-md font-bold text-gray-800">تسجيل حصة / درس (لا تُحتسب رسمياً حتى يوافق عليها الحارس العام)</h3>
+                    <h3 class="text-md font-bold text-gray-800">دفتر النصوص (تسجيل مباشر عند الأستاذ دون موافقة الحارس العام — يُرسل للمدير عند الطلب)</h3>
                 </div>
                 <form action="/teacher/submit-lesson" method="POST" class="grid grid-cols-1 md:grid-cols-5 gap-3">
                     <div><select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white"><option value="" disabled selected>-- اختر القسم --</option>{my_sections_options}</select></div>
@@ -1214,13 +1214,13 @@ def teacher_dashboard_view():
                     <div><input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" placeholder="عدد الساعات" required class="w-full px-3 py-2 rounded-lg border text-xs font-bold"></div>
                     <div class="flex gap-2">
                         <input type="date" name="date" value="{today_date}" required class="w-full px-3 py-2 rounded-lg border text-xs">
-                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg text-xs whitespace-nowrap">إرسال</button>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg text-xs whitespace-nowrap">تسجيل</button>
                     </div>
                 </form>
 
                 <div class="overflow-x-auto pt-2">
                     <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2 px-3">القسم</th><th class="py-2 px-3">الدرس</th><th class="py-2 px-3">الساعات</th><th class="py-2 px-3">التاريخ</th><th class="py-2 px-3">الحالة</th></tr></thead>
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2 px-3">القسم</th><th class="py-2 px-3">الدرس</th><th class="py-2 px-3">الساعات</th><th class="py-2 px-3">التاريخ</th><th class="py-2 px-3">الحالة</th><th class="py-2 px-3">إرسال للمدير</th></tr></thead>
                         <tbody>{lessons_history_rows}</tbody>
                     </table>
                 </div>
@@ -1289,10 +1289,10 @@ def remove_section(sid):
 def mark_absence():
     if session.get("role") != "teacher":
         return redirect(url_for("home"))
-    student_name = request.form.get("student_name")
-    section_name = request.form.get("section_name")
-    date = request.form.get("date")
-    selected_section = request.form.get("selected_section")
+    student_name = (request.form.get("student_name") or "").strip()
+    section_name = (request.form.get("section_name") or "").strip()
+    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
+    selected_section = (request.form.get("selected_section") or section_name).strip()
     try:
         hours_val = float(request.form.get("hours") or 1.0)
         if hours_val <= 0:
@@ -1312,7 +1312,8 @@ def mark_absence():
                     date=date,
                     status="غائب",
                     hours=hours_val,
-                    approval_status="pending",
+                    approval_status="approved",
+                    approved_by="مسجل آنياً (أستاذ + حارس عام)",
                 )
             )
             db.session.commit()
@@ -1324,10 +1325,10 @@ def mark_absence():
 def submit_lesson():
     if session.get("role") != "teacher":
         return redirect(url_for("home"))
-    sec = request.form.get("section_name")
-    title = request.form.get("lesson_title")
-    content = request.form.get("content")
-    date = request.form.get("date")
+    sec = (request.form.get("section_name") or "").strip()
+    title = (request.form.get("lesson_title") or "").strip()
+    content = (request.form.get("content") or "").strip()
+    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
     try:
         hours_val = float(request.form.get("hours") or 1.0)
         if hours_val <= 0:
@@ -1345,12 +1346,24 @@ def submit_lesson():
                 content=content,
                 date=date,
                 hours=hours_val,
-                approval_status="pending",
+                approval_status="approved",
+                approved_by="مباشر - الأستاذ",
             )
         )
         db.session.commit()
     return redirect(url_for("teacher_dashboard_view", section=sec))
 
+
+@app.route("/teacher/send-lesson-to-director/<int:lid>", methods=["POST"])
+@login_required
+def send_lesson_to_director(lid):
+    if session.get("role") != "teacher":
+        return redirect(url_for("home"))
+    lesson = LessonLog.query.get(lid)
+    if lesson and lesson.teacher_username == session.get("username"):
+        lesson.approved_by = "مرسل للمدير"
+        db.session.commit()
+    return redirect(url_for("teacher_dashboard_view", section=lesson.section_name if lesson else ""))
 
 # ==============================================================================
 # لوحة الحارس العام / مستشار التربية
