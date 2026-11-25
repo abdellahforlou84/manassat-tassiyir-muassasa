@@ -2048,7 +2048,6 @@ def mod_teacher_dashboard_view():
     </html>
     """
 
-
 # --- 5. لوحة الحارس العام وتقرير الغيابات (تلاميذ + أساتذة + أعضاء الاستشارة) ورفعه للمدير ---
 @_mod_override_route("/counselor/submit-report-to-director", "mod_submit_report_to_director", methods=["POST"])
 @login_required
@@ -2066,16 +2065,16 @@ def mod_submit_report_to_director():
     )
 
     db.session.execute(
-        text("""
-            INSERT INTO counselor_director_report (
-                counselor_username, counselor_name, created_at,
-                total_student_absences, total_student_absent_hours,
-                total_teacher_absences, total_teacher_absent_hours,
-                counselor_members_count, report_summary, sent_to_director
-            ) VALUES (
-                :u, :n, :dt, :sa, :sah, :ta, :tah, :cm, :sm, 1
-            )
-        """),
+        text(
+            "INSERT INTO counselor_director_report ("
+            "counselor_username, counselor_name, created_at, "
+            "total_student_absences, total_student_absent_hours, "
+            "total_teacher_absences, total_teacher_absent_hours, "
+            "counselor_members_count, report_summary, sent_to_director"
+            ") VALUES ("
+            ":u, :n, :dt, :sa, :sah, :ta, :tah, :cm, :sm, 1"
+            ")"
+        ),
         {
             "u": session.get("username"),
             "n": session.get("fullname"),
@@ -2104,27 +2103,36 @@ def mod_counselor_dashboard_view():
     declared_teachers = get_declared_teachers()
 
     counselor_members_html = "".join([
-        f"<span class='bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1 rounded-lg text-xs font-bold'>{m.fullname}</span>"
+        (
+            "<span class='bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1 rounded-lg text-xs font-bold'>"
+            f"{m.fullname}"
+            "</span>"
+        )
         for m in stats["counselor_members"]
     ]) or "<span class='text-xs text-gray-400'>لا يوجد أعضاء استشارة مسجلون حالياً.</span>"
 
     declared_teachers_cards = "".join([
-        f"""<div class='bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs flex justify-between items-center gap-3'>
-            <span class='font-bold text-slate-800'>{t.fullname}</span>
-            <span class='bg-blue-100 text-blue-900 font-extrabold px-2.5 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>
-        </div>"""
+        (
+            "<div class='bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs flex justify-between items-center gap-3'>"
+            f"<span class='font-bold text-slate-800'>{t.fullname}</span>"
+            f"<span class='bg-blue-100 text-blue-900 font-extrabold px-2.5 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>"
+            "</div>"
+        )
         for t in declared_teachers
     ]) or "<p class='text-xs text-slate-400'>لم يحدد أي أستاذ حجمه الساعي بعد.</p>"
 
-    att_rows = "".join([f"""
-    <tr class='border-b text-xs'>
-        <td class='py-2.5 px-3 font-bold'>{a.student_name}</td>
-        <td class='py-2.5 px-3'>{a.section_name}</td>
-        <td class='py-2.5 px-3'>{a.teacher_name}</td>
-        <td class='py-2.5 px-3'>{a.date}</td>
-        <td class='py-2.5 px-3 font-extrabold text-red-700'>{format_hours(a.hours)} سا</td>
-    </tr>
-    """ for a in reversed(attendances)]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد غيابات مسجلة بعد.</td></tr>"
+    att_rows = "".join([
+        (
+            "<tr class='border-b text-xs'>"
+            f"<td class='py-2.5 px-3 font-bold'>{a.student_name}</td>"
+            f"<td class='py-2.5 px-3'>{a.section_name}</td>"
+            f"<td class='py-2.5 px-3'>{a.teacher_name}</td>"
+            f"<td class='py-2.5 px-3'>{a.date}</td>"
+            f"<td class='py-2.5 px-3 font-extrabold text-red-700'>{format_hours(a.hours)} سا</td>"
+            "</tr>"
+        )
+        for a in reversed(attendances)
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد غيابات مسجلة بعد.</td></tr>"
 
     return f"""
     <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
@@ -2198,29 +2206,60 @@ def mod_director_dashboard_view():
     sent_lessons = LessonLog.query.filter_by(approved_by="مرسل للمدير").all()
     declared_teachers = get_declared_teachers()
     reports = db.session.execute(
-        text("SELECT id, counselor_name, created_at, total_student_absences, total_student_absent_hours, total_teacher_absences, total_teacher_absent_hours, counselor_members_count, report_summary FROM counselor_director_report ORDER BY id DESC")
+        text(
+            "SELECT id, counselor_name, created_at, total_student_absences, "
+            "total_student_absent_hours, total_teacher_absences, "
+            "total_teacher_absent_hours, counselor_members_count, report_summary "
+            "FROM counselor_director_report ORDER BY id DESC"
+        )
     ).fetchall()
 
     latest_report = reports[0] if reports else None
-    latest_student_abs = f"{latest_report[3]} / {format_hours(latest_report[4])} سا" if latest_report else "لم يُرفع تقرير بعد"
-    latest_teacher_abs = f"{latest_report[5]} / {format_hours(latest_report[6])} سا" if latest_report else "لم يُرفع تقرير بعد"
+    latest_student_abs = (
+        f"{latest_report[3]} / {format_hours(latest_report[4])} سا"
+        if latest_report
+        else "لم يُرفع تقرير بعد"
+    )
+    latest_teacher_abs = (
+        f"{latest_report[5]} / {format_hours(latest_report[6])} سا"
+        if latest_report
+        else "لم يُرفع تقرير بعد"
+    )
     latest_counselor_cnt = f"{latest_report[7]}" if latest_report else "0"
 
     declared_teachers_html = "".join([
-        f"""<div class='bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs flex justify-between items-center'>
-            <span class='font-bold text-slate-800'>{t.fullname}</span>
-            <span class='bg-blue-100 text-blue-900 font-extrabold px-3 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>
-        </div>"""
+        (
+            "<div class='bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs flex justify-between items-center'>"
+            f"<span class='font-bold text-slate-800'>{t.fullname}</span>"
+            f"<span class='bg-blue-100 text-blue-900 font-extrabold px-3 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>"
+            "</div>"
+        )
         for t in declared_teachers
     ]) or "<p class='text-xs text-slate-400'>لا توجد حجوم ساعية محددة من طرف الأساتذة بعد.</p>"
 
     sent_lessons_rows = "".join([
-        f"<tr class='border-b text-xs'><td class='py-2.5 px-3'>{l.teacher_name}</td><td class='py-2.5 px-3'>{l.section_name}</td><td class='py-2.5 px-3 font-bold'>{l.lesson_title}</td><td class='py-2.5 px-3 font-bold'>{format_hours(l.hours)} سا</td><td class='py-2.5 px-3'>{l.date}</td></tr>"
+        (
+            "<tr class='border-b text-xs'>"
+            f"<td class='py-2.5 px-3'>{l.teacher_name}</td>"
+            f"<td class='py-2.5 px-3'>{l.section_name}</td>"
+            f"<td class='py-2.5 px-3 font-bold'>{l.lesson_title}</td>"
+            f"<td class='py-2.5 px-3 font-bold'>{format_hours(l.hours)} سا</td>"
+            f"<td class='py-2.5 px-3'>{l.date}</td>"
+            "</tr>"
+        )
         for l in reversed(sent_lessons)
     ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لم يرسل أي أستاذ حصصاً للمدير بعد.</td></tr>"
 
     reports_rows = "".join([
-        f"<tr class='border-b text-xs'><td class='py-2.5 px-3 font-bold'>{r[1] or '-'}</td><td class='py-2.5 px-3'>{r[2] or '-'}</td><td class='py-2.5 px-3'>{r[3]} ({format_hours(r[4])} سا)</td><td class='py-2.5 px-3'>{r[5]} ({format_hours(r[6])} سا)</td><td class='py-2.5 px-3 font-bold'>{r[7]}</td></tr>"
+        (
+            "<tr class='border-b text-xs'>"
+            f"<td class='py-2.5 px-3 font-bold'>{r[1] or '-'}</td>"
+            f"<td class='py-2.5 px-3'>{r[2] or '-'}</td>"
+            f"<td class='py-2.5 px-3'>{r[3]} ({format_hours(r[4])} سا)</td>"
+            f"<td class='py-2.5 px-3'>{r[5]} ({format_hours(r[6])} سا)</td>"
+            f"<td class='py-2.5 px-3 font-bold'>{r[7]}</td>"
+            "</tr>"
+        )
         for r in reports
     ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد تقارير مرفوعة من الحارس العام بعد.</td></tr>"
 
@@ -2288,6 +2327,7 @@ def mod_director_dashboard_view():
 # ==============================================================================
 # [نهاية التعديل المنفرد]
 # ==============================================================================
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
