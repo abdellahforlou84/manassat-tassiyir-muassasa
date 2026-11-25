@@ -1,6 +1,6 @@
 # ==============================================================================
 # منصة تسيير المؤسسة - ثانوية الشهيد قوديد أحمد (سيدي الشحمي)
-# الكود المتكامل والموحّد مع ترقية الجداول تلقائياً وفحص اتصال قاعدة البيانات
+# النسخة الكاملة الموحّدة البديلة (اعتماد الحارس العام + الحجم الساعي المتغير + مؤشرات اللوحات)
 # ==============================================================================
 
 import json
@@ -67,6 +67,7 @@ class User(db.Model):
     role = db.Column(db.String(50), nullable=False, default="teacher")
     fullname = db.Column(db.String(120), nullable=False)
     sections_json = db.Column(db.Text, nullable=False, default="[]")
+    weekly_hours = db.Column(db.Float, nullable=True)  # يحددها الأستاذ بنفسه
 
     @property
     def password(self):
@@ -114,18 +115,26 @@ class Attendance(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     student_name = db.Column(db.String(120), nullable=False)
     section_name = db.Column(db.String(100), nullable=False)
+    teacher_username = db.Column(db.String(80), nullable=True)
     teacher_name = db.Column(db.String(120), nullable=False)
     date = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), default="غائب")
+    hours = db.Column(db.Float, nullable=False, default=1.0)
+    approval_status = db.Column(db.String(20), nullable=False, default="pending")  # pending | approved | rejected
+    approved_by = db.Column(db.String(120), nullable=True)
 
 
 class LessonLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    teacher_username = db.Column(db.String(80), nullable=True)
     teacher_name = db.Column(db.String(120), nullable=False)
     section_name = db.Column(db.String(100), nullable=False)
     lesson_title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
     date = db.Column(db.String(50), nullable=False)
+    hours = db.Column(db.Float, nullable=False, default=1.0)
+    approval_status = db.Column(db.String(20), nullable=False, default="pending")  # pending | approved | rejected
+    approved_by = db.Column(db.String(120), nullable=True)
 
 
 DEFAULT_STUDENTS = [
@@ -561,24 +570,53 @@ DEFAULT_STUDENTS = [
 ]
 
 
-def ensure_user_columns():
-    """ترقية جدول user تلقائياً إذا كان منشأً مسبقاً بعمود قديم."""
+def _add_column_if_missing(conn, table_name, col_name, col_def):
+    conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN {col_name} {col_def}'))
+
+
+def ensure_schema_columns():
+    """ترقية الجداول تلقائياً لإضافة الأعمدة الجديدة دون فقدان البيانات."""
     inspector = inspect(db.engine)
-    if "user" not in inspector.get_table_names():
-        return
-    existing_cols = {col["name"] for col in inspector.get_columns("user")}
+    tables = set(inspector.get_table_names())
+
     with db.engine.begin() as conn:
-        if "password_hash" not in existing_cols:
-            conn.execute(text('ALTER TABLE "user" ADD COLUMN password_hash VARCHAR(255)'))
-            if "password" in existing_cols:
-                conn.execute(text('UPDATE "user" SET password_hash = password WHERE password_hash IS NULL'))
-        if "sections_json" not in existing_cols:
-            conn.execute(text("ALTER TABLE \"user\" ADD COLUMN sections_json TEXT DEFAULT '[]'"))
+        if "user" in tables:
+            cols = {c["name"] for c in inspector.get_columns("user")}
+            if "password_hash" not in cols:
+                _add_column_if_missing(conn, "user", "password_hash", "VARCHAR(255)")
+                if "password" in cols:
+                    conn.execute(text('UPDATE "user" SET password_hash = password WHERE password_hash IS NULL'))
+            if "sections_json" not in cols:
+                _add_column_if_missing(conn, "user", "sections_json", "TEXT DEFAULT '[]'")
+            if "weekly_hours" not in cols:
+                _add_column_if_missing(conn, "user", "weekly_hours", "FLOAT")
+
+        if "attendance" in tables:
+            cols = {c["name"] for c in inspector.get_columns("attendance")}
+            if "teacher_username" not in cols:
+                _add_column_if_missing(conn, "attendance", "teacher_username", "VARCHAR(80)")
+            if "hours" not in cols:
+                _add_column_if_missing(conn, "attendance", "hours", "FLOAT DEFAULT 1.0")
+            if "approval_status" not in cols:
+                _add_column_if_missing(conn, "attendance", "approval_status", "VARCHAR(20) DEFAULT 'approved'")
+            if "approved_by" not in cols:
+                _add_column_if_missing(conn, "attendance", "approved_by", "VARCHAR(120)")
+
+        if "lesson_log" in tables:
+            cols = {c["name"] for c in inspector.get_columns("lesson_log")}
+            if "teacher_username" not in cols:
+                _add_column_if_missing(conn, "lesson_log", "teacher_username", "VARCHAR(80)")
+            if "hours" not in cols:
+                _add_column_if_missing(conn, "lesson_log", "hours", "FLOAT DEFAULT 1.0")
+            if "approval_status" not in cols:
+                _add_column_if_missing(conn, "lesson_log", "approval_status", "VARCHAR(20) DEFAULT 'pending'")
+            if "approved_by" not in cols:
+                _add_column_if_missing(conn, "lesson_log", "approved_by", "VARCHAR(120)")
 
 
 def init_database():
     db.create_all()
-    ensure_user_columns()
+    ensure_schema_columns()
 
     if not User.query.first():
         db.session.add_all([
@@ -627,8 +665,22 @@ def redirect_by_role(role):
     return redirect(url_for("home"))
 
 
+def format_hours(val):
+    try:
+        num = float(val or 0)
+        return f"{num:g}"
+    except (ValueError, TypeError):
+        return "0"
+
+
+def get_declared_teachers():
+    """يرجع فقط الأساتذة الذين حددوا حجمهم الساعي الفعلي."""
+    teachers = User.query.filter_by(role="teacher").all()
+    return [t for t in teachers if t.weekly_hours is not None and float(t.weekly_hours) > 0]
+
+
 # ==============================================================================
-# واجهات HTML والمسارات
+# واجهات HTML للمصادقة والتسجيل والاستعادة
 # ==============================================================================
 
 LOGIN_TEMPLATE = """
@@ -750,6 +802,10 @@ REGISTER_PAGE_HTML = """
                     <option value="inspector_deputy">الناظر</option>
                     <option value="director">المدير</option>
                 </select>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الحجم الساعي الفعلي الأسبوعي (اختياري للأستاذ — يُحدَّد لاحقاً من لوحة الأستاذ)</label>
+                <input type="number" step="0.5" min="1" max="50" name="weekly_hours" placeholder="مثال: 13 أو 16" class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
             </div>
             <div>
                 <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
@@ -883,6 +939,7 @@ def register_account():
         username = (request.form.get("username") or "").strip().lower()
         role = (request.form.get("role") or "teacher").strip()
         password = request.form.get("password") or ""
+        weekly_hours_raw = (request.form.get("weekly_hours") or "").strip()
         selected_sections = [
             s for s in request.form.getlist("sections") if s in OFFICIAL_SECTIONS
         ]
@@ -898,12 +955,22 @@ def register_account():
             flash("اسم المستخدم مستعمل مسبقاً، يرجى اختيار اسم آخر.", "danger")
             return redirect(url_for("register_account"))
 
+        parsed_hours = None
+        if role == "teacher" and weekly_hours_raw:
+            try:
+                val = float(weekly_hours_raw)
+                if val > 0:
+                    parsed_hours = val
+            except ValueError:
+                parsed_hours = None
+
         try:
             new_user = User(
                 username=username,
                 password=password,
                 role=role,
                 fullname=fullname,
+                weekly_hours=parsed_hours,
             )
             new_user.sections = selected_sections
             db.session.add(new_user)
@@ -964,6 +1031,10 @@ def recover_account():
     return render_template_string(RECOVER_PAGE_HTML)
 
 
+# ==============================================================================
+# لوحة تحكم الأستاذ
+# ==============================================================================
+
 @app.route("/teacher/dashboard-view")
 @login_required
 def teacher_dashboard_view():
@@ -971,6 +1042,7 @@ def teacher_dashboard_view():
         return redirect(url_for("home"))
 
     teacher_uname = session.get("username")
+    teacher_user = User.query.filter_by(username=teacher_uname).first()
     today_date = datetime.now().strftime("%Y-%m-%d")
 
     assigned_sections = TeacherSection.query.filter_by(
@@ -997,17 +1069,36 @@ def teacher_dashboard_view():
         if sec not in assigned_section_names
     ])
 
+    declared_hours = (
+        teacher_user.weekly_hours
+        if teacher_user and teacher_user.weekly_hours is not None and float(teacher_user.weekly_hours) > 0
+        else None
+    )
+    hours_display = f"{format_hours(declared_hours)} سا/أسبوع" if declared_hours is not None else "غير محدد بعد"
+    hours_input_val = format_hours(declared_hours) if declared_hours is not None else ""
+
+    my_attendances = Attendance.query.filter_by(teacher_username=teacher_uname).all()
+    my_lessons = LessonLog.query.filter_by(teacher_username=teacher_uname).all()
+
+    pending_att_count = sum(1 for a in my_attendances if a.approval_status == "pending")
+    pending_les_count = sum(1 for l in my_lessons if l.approval_status == "pending")
+    pending_total = pending_att_count + pending_les_count
+
+    approved_att_hours = sum(float(a.hours or 0) for a in my_attendances if a.approval_status == "approved")
+    approved_les_hours = sum(float(l.hours or 0) for l in my_lessons if l.approval_status == "approved")
+
     attendance_rows = "".join([f"""
     <tr class="border-b hover:bg-gray-50">
         <td class="py-2.5 px-3 text-sm font-semibold text-gray-800">{s.fullname}</td>
         <td class="py-2.5 px-3 text-sm text-gray-600">{s.section_name}</td>
         <td class="py-2.5 px-3 text-center">
-            <form action="/teacher/mark-absence" method="POST" class="inline">
+            <form action="/teacher/mark-absence" method="POST" class="inline-flex items-center gap-1.5">
                 <input type="hidden" name="student_name" value="{s.fullname}">
                 <input type="hidden" name="section_name" value="{s.section_name}">
                 <input type="hidden" name="date" value="{today_date}">
                 <input type="hidden" name="selected_section" value="{selected_section}">
-                <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">تسجيل غياب اليوم</button>
+                <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" title="عدد الساعات" class="w-16 px-2 py-1 border rounded text-xs text-center font-bold">
+                <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">إرسال غياب للموافقة</button>
             </form>
         </td>
     </tr>
@@ -1020,18 +1111,62 @@ def teacher_dashboard_view():
     </div>
     """ for ts in assigned_sections]) or "<p class='text-xs text-gray-400'>لم تضف أي قسم بعد.</p>"
 
+    lessons_history_rows = "".join([
+        f"""<tr class='border-b text-xs'>
+            <td class='py-2 px-3 font-bold'>{l.section_name}</td>
+            <td class='py-2 px-3'>{l.lesson_title}</td>
+            <td class='py-2 px-3 font-bold'>{format_hours(l.hours)} سا</td>
+            <td class='py-2 px-3'>{l.date}</td>
+            <td class='py-2 px-3'>
+                {"<span class='bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-bold'>معتمدة</span>" if l.approval_status == "approved" else ("<span class='bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold'>مرفوضة</span>" if l.approval_status == "rejected" else "<span class='bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold'>بانتظار موافقة الحارس العام</span>")}
+            </td>
+        </tr>"""
+        for l in reversed(my_lessons)
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لم تقم بإرسال أي حصة بعد.</td></tr>"
+
     return f"""
     <html lang="ar" dir="rtl">
     <head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
     <body class="bg-slate-100 min-h-screen p-4 md:p-6">
         <div class="max-w-6xl mx-auto space-y-6">
-            <div class="bg-white rounded-2xl shadow-md p-6 text-center border-b-4 border-blue-800 space-y-1">
-                <p class="text-xs font-bold text-gray-600">الجمهورية الجزائرية الديمقراطية الشعبية | وزارة التربية الوطنية</p>
-                <h2 class="text-lg font-extrabold text-blue-900 mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</h2>
-                <div class="pt-2 flex justify-between items-center border-t mt-4 text-sm">
+            <div class="bg-white rounded-2xl shadow-md p-6 border-b-4 border-blue-800 space-y-4">
+                <div class="text-center space-y-1">
+                    <p class="text-xs font-bold text-gray-600">الجمهورية الجزائرية الديمقراطية الشعبية | وزارة التربية الوطنية</p>
+                    <h2 class="text-lg font-extrabold text-blue-900">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</h2>
+                </div>
+                <div class="pt-3 flex flex-wrap justify-between items-center border-t text-sm gap-2">
                     <span class="font-bold text-gray-700">الأستاذ: {session.get('fullname')} | التاريخ: {today_date}</span>
                     <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-100">تسجيل الخروج</a>
                 </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
+                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-blue-700">حجمي الساعي الفعلي</div>
+                        <div class="text-base font-extrabold text-blue-950 mt-1">{hours_display}</div>
+                    </div>
+                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-amber-800">حصص/غيابات بانتظار الموافقة</div>
+                        <div class="text-base font-extrabold text-amber-950 mt-1">{pending_total}</div>
+                    </div>
+                    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-emerald-700">ساعات الحصص المعتمدة</div>
+                        <div class="text-base font-extrabold text-emerald-950 mt-1">{format_hours(approved_les_hours)} سا</div>
+                    </div>
+                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-rose-700">ساعات الغياب المعتمدة</div>
+                        <div class="text-base font-extrabold text-rose-950 mt-1">{format_hours(approved_att_hours)} سا</div>
+                    </div>
+                </div>
+
+                <form action="/teacher/set-hours" method="POST" class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3">
+                    <div class="text-xs font-bold text-slate-700">
+                        تحديد/تعديل حجمك الساعي الفعلي (يظهر للحارس العام والمدير بعد الحفظ):
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input type="number" step="0.5" min="1" max="50" name="weekly_hours" value="{hours_input_val}" placeholder="مثال: 13" required class="w-28 px-3 py-1.5 border rounded-lg text-xs font-bold text-center bg-white">
+                        <button type="submit" class="bg-blue-700 hover:bg-blue-800 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition">حفظ الحجم الساعي</button>
+                    </div>
+                </form>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1068,22 +1203,51 @@ def teacher_dashboard_view():
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h3 class="text-md font-bold text-gray-800 mb-3">دفتر النصوص الرقمي (تسجيل الدرس المنجز)</h3>
-                <form action="/teacher/submit-lesson" method="POST" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
+                <div>
+                    <h3 class="text-md font-bold text-gray-800">تسجيل حصة / درس (لا تُحتسب رسمياً حتى يوافق عليها الحارس العام)</h3>
+                </div>
+                <form action="/teacher/submit-lesson" method="POST" class="grid grid-cols-1 md:grid-cols-5 gap-3">
                     <div><select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white"><option value="" disabled selected>-- اختر القسم --</option>{my_sections_options}</select></div>
                     <div><input type="text" name="lesson_title" placeholder="عنوان الدرس..." required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
                     <div><input type="text" name="content" placeholder="الملخص..." required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
+                    <div><input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" placeholder="عدد الساعات" required class="w-full px-3 py-2 rounded-lg border text-xs font-bold"></div>
                     <div class="flex gap-2">
                         <input type="date" name="date" value="{today_date}" required class="w-full px-3 py-2 rounded-lg border text-xs">
-                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg text-xs">حفظ</button>
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg text-xs whitespace-nowrap">إرسال</button>
                     </div>
                 </form>
+
+                <div class="overflow-x-auto pt-2">
+                    <table class="w-full text-right">
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2 px-3">القسم</th><th class="py-2 px-3">الدرس</th><th class="py-2 px-3">الساعات</th><th class="py-2 px-3">التاريخ</th><th class="py-2 px-3">الحالة</th></tr></thead>
+                        <tbody>{lessons_history_rows}</tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </body>
     </html>
     """
+
+
+@app.route("/teacher/set-hours", methods=["POST"])
+@login_required
+def set_teacher_hours():
+    if session.get("role") != "teacher":
+        return redirect(url_for("home"))
+    raw_hours = (request.form.get("weekly_hours") or "").strip()
+    try:
+        val = float(raw_hours)
+        if val <= 0:
+            raise ValueError("Hours must be positive")
+        user = User.query.filter_by(username=session.get("username")).first()
+        if user:
+            user.weekly_hours = val
+            db.session.commit()
+    except ValueError:
+        pass
+    return redirect(url_for("teacher_dashboard_view"))
 
 
 @app.route("/teacher/add-section", methods=["POST"])
@@ -1129,15 +1293,26 @@ def mark_absence():
     section_name = request.form.get("section_name")
     date = request.form.get("date")
     selected_section = request.form.get("selected_section")
+    try:
+        hours_val = float(request.form.get("hours") or 1.0)
+        if hours_val <= 0:
+            hours_val = 1.0
+    except ValueError:
+        hours_val = 1.0
+
     if student_name and section_name and date:
-        if not Attendance.query.filter_by(student_name=student_name, date=date).first():
+        existing = Attendance.query.filter_by(student_name=student_name, date=date).first()
+        if not existing:
             db.session.add(
                 Attendance(
                     student_name=student_name,
                     section_name=section_name,
+                    teacher_username=session.get("username"),
                     teacher_name=session.get("fullname"),
                     date=date,
                     status="غائب",
+                    hours=hours_val,
+                    approval_status="pending",
                 )
             )
             db.session.commit()
@@ -1153,18 +1328,96 @@ def submit_lesson():
     title = request.form.get("lesson_title")
     content = request.form.get("content")
     date = request.form.get("date")
+    try:
+        hours_val = float(request.form.get("hours") or 1.0)
+        if hours_val <= 0:
+            hours_val = 1.0
+    except ValueError:
+        hours_val = 1.0
+
     if sec and title and content and date:
         db.session.add(
             LessonLog(
+                teacher_username=session.get("username"),
                 teacher_name=session.get("fullname"),
                 section_name=sec,
                 lesson_title=title,
                 content=content,
                 date=date,
+                hours=hours_val,
+                approval_status="pending",
             )
         )
         db.session.commit()
     return redirect(url_for("teacher_dashboard_view", section=sec))
+
+
+# ==============================================================================
+# لوحة الحارس العام / مستشار التربية
+# ==============================================================================
+
+@app.route("/counselor/approve-lesson/<int:lid>", methods=["POST"])
+@login_required
+def approve_lesson(lid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    lesson = LessonLog.query.get(lid)
+    if lesson:
+        try:
+            hrs = float(request.form.get("hours") or lesson.hours or 1.0)
+            if hrs > 0:
+                lesson.hours = hrs
+        except ValueError:
+            pass
+        lesson.approval_status = "approved"
+        lesson.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+@app.route("/counselor/reject-lesson/<int:lid>", methods=["POST"])
+@login_required
+def reject_lesson(lid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    lesson = LessonLog.query.get(lid)
+    if lesson:
+        lesson.approval_status = "rejected"
+        lesson.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+@app.route("/counselor/approve-attendance/<int:aid>", methods=["POST"])
+@login_required
+def approve_attendance(aid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    att = Attendance.query.get(aid)
+    if att:
+        try:
+            hrs = float(request.form.get("hours") or att.hours or 1.0)
+            if hrs > 0:
+                att.hours = hrs
+        except ValueError:
+            pass
+        att.approval_status = "approved"
+        att.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+@app.route("/counselor/reject-attendance/<int:aid>", methods=["POST"])
+@login_required
+def reject_attendance(aid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    att = Attendance.query.get(aid)
+    if att:
+        att.approval_status = "rejected"
+        att.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
 
 
 @app.route("/counselor/dashboard-view")
@@ -1172,70 +1425,253 @@ def submit_lesson():
 def counselor_dashboard_view():
     if session.get("role") != "counselor":
         return redirect(url_for("home"))
+
     attendances = Attendance.query.all()
-    rows = "".join([f"<tr class='border-b'><td class='py-3 px-4'>{a.student_name}</td><td class='py-3 px-4'>{a.section_name}</td><td class='py-3 px-4'>{a.teacher_name}</td><td class='py-3 px-4'>{a.date}</td><td class='py-3 px-4'><span class='bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold'>{a.status}</span></td></tr>" for a in attendances]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400'>لا توجد غيابات مسجلة.</td></tr>"
+    lessons = LessonLog.query.all()
+
+    approved_att = [a for a in attendances if a.approval_status == "approved"]
+    pending_att = [a for a in attendances if a.approval_status == "pending"]
+    approved_les = [l for l in lessons if l.approval_status == "approved"]
+    pending_les = [l for l in lessons if l.approval_status == "pending"]
+
+    total_absent_hours = sum(float(a.hours or 0) for a in approved_att)
+    total_approved_lesson_hours = sum(float(l.hours or 0) for l in approved_les)
+    declared_teachers = get_declared_teachers()
+
+    declared_teachers_cards = "".join([
+        f"""<div class='bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs flex justify-between items-center gap-3'>
+            <span class='font-bold text-slate-800'>{t.fullname}</span>
+            <span class='bg-blue-100 text-blue-900 font-extrabold px-2.5 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>
+        </div>"""
+        for t in declared_teachers
+    ]) or "<p class='text-xs text-slate-400'>لم يحدد أي أستاذ حجمه الساعي بعد.</p>"
+
+    pending_lessons_rows = "".join([
+        f"""<tr class='border-b text-xs'>
+            <td class='py-2.5 px-3 font-bold'>{l.teacher_name}</td>
+            <td class='py-2.5 px-3'>{l.section_name}</td>
+            <td class='py-2.5 px-3'>{l.lesson_title}</td>
+            <td class='py-2.5 px-3'>{l.date}</td>
+            <td class='py-2.5 px-3'>
+                <form action='/counselor/approve-lesson/{l.id}' method='POST' class='inline-flex items-center gap-1.5'>
+                    <input type='number' step='0.5' min='0.5' max='12' name='hours' value='{format_hours(l.hours)}' class='w-16 px-2 py-1 border rounded text-center font-bold'>
+                    <button type='submit' class='bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded font-bold'>موافقة وتسجيل</button>
+                </form>
+                <form action='/counselor/reject-lesson/{l.id}' method='POST' class='inline mr-1'>
+                    <button type='submit' class='bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-2.5 py-1 rounded font-bold'>رفض</button>
+                </form>
+            </td>
+        </tr>"""
+        for l in pending_les
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد حصص بانتظار الموافقة حالياً.</td></tr>"
+
+    pending_att_rows = "".join([
+        f"""<tr class='border-b text-xs'>
+            <td class='py-2.5 px-3 font-bold'>{a.student_name}</td>
+            <td class='py-2.5 px-3'>{a.section_name}</td>
+            <td class='py-2.5 px-3'>{a.teacher_name}</td>
+            <td class='py-2.5 px-3'>{a.date}</td>
+            <td class='py-2.5 px-3'>
+                <form action='/counselor/approve-attendance/{a.id}' method='POST' class='inline-flex items-center gap-1.5'>
+                    <input type='number' step='0.5' min='0.5' max='12' name='hours' value='{format_hours(a.hours)}' class='w-16 px-2 py-1 border rounded text-center font-bold'>
+                    <button type='submit' class='bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded font-bold'>اعتماد الغياب</button>
+                </form>
+                <form action='/counselor/reject-attendance/{a.id}' method='POST' class='inline mr-1'>
+                    <button type='submit' class='bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-2.5 py-1 rounded font-bold'>رفض</button>
+                </form>
+            </td>
+        </tr>"""
+        for a in pending_att
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد غيابات معلقة حالياً.</td></tr>"
+
+    approved_att_rows = "".join([
+        f"""<tr class='border-b text-xs'>
+            <td class='py-2.5 px-3 font-bold'>{a.student_name}</td>
+            <td class='py-2.5 px-3'>{a.section_name}</td>
+            <td class='py-2.5 px-3'>{a.teacher_name}</td>
+            <td class='py-2.5 px-3'>{a.date}</td>
+            <td class='py-2.5 px-3 font-extrabold text-red-700'>{format_hours(a.hours)} سا</td>
+        </tr>"""
+        for a in approved_att
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد غيابات معتمدة بعد.</td></tr>"
+
     return f"""
-    <html lang="ar" dir="rtl"><head><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
+    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
     <body class="bg-slate-100 min-h-screen p-6">
-        <div class="max-w-5xl mx-auto space-y-6">
-            <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-amber-600">
-                <div><h1 class="text-xl font-bold text-gray-800">مكتب الاستشارة التربوية - الحارس العام</h1><p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد</p></div>
-                <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
+        <div class="max-w-6xl mx-auto space-y-6">
+            <div class="bg-white rounded-2xl shadow-md p-6 border-r-8 border-amber-600 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                        <h1 class="text-xl font-bold text-gray-800">مكتب الاستشارة التربوية - الحارس العام</h1>
+                        <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
+                    </div>
+                    <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-amber-800">طلبات بانتظار الموافقة</div>
+                        <div class="text-base font-extrabold text-amber-950 mt-1">{len(pending_les) + len(pending_att)}</div>
+                    </div>
+                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-rose-700">إجمالي ساعات الغياب المسجلة</div>
+                        <div class="text-base font-extrabold text-rose-950 mt-1">{format_hours(total_absent_hours)} سا</div>
+                    </div>
+                    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-emerald-700">ساعات الحصص المعتمدة</div>
+                        <div class="text-base font-extrabold text-emerald-950 mt-1">{format_hours(total_approved_lesson_hours)} سا</div>
+                    </div>
+                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-blue-700">أساتذة حددوا حجمهم الساعي</div>
+                        <div class="text-base font-extrabold text-blue-950 mt-1">{len(declared_teachers)}</div>
+                    </div>
+                </div>
+
+                <div class="border-t pt-3 space-y-2">
+                    <div class="text-xs font-bold text-slate-700">الحجم الساعي الفعلي للأساتذة (يظهر بعد تحديده من الأستاذ):</div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                        {declared_teachers_cards}
+                    </div>
+                </div>
             </div>
+
             <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">ورقة الغيابات اليومية الواردة من الأساتذة</h2>
-                <table class="w-full text-right">
-                    <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-3 px-4">التلميذ</th><th class="py-3 px-4">القسم</th><th class="py-3 px-4">الأستاذ</th><th class="py-3 px-4">التاريخ</th><th class="py-3 px-4">الحالة</th></tr></thead>
-                    <tbody>{rows}</tbody>
-                </table>
+                <h2 class="text-md font-bold text-gray-800 mb-4">الحصص المرسلة من الأساتذة بانتظار موافقتك</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-right">
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">الأستاذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">الدرس</th><th class="py-2.5 px-3">التاريخ</th><th class="py-2.5 px-3">إجراء الموافقة والساعات</th></tr></thead>
+                        <tbody>{pending_lessons_rows}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl shadow-md p-6">
+                <h2 class="text-md font-bold text-gray-800 mb-4">الغيابات المرسلة بانتظار موافقتك واحتساب الساعات</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-right">
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">التلميذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">الأستاذ</th><th class="py-2.5 px-3">التاريخ</th><th class="py-2.5 px-3">إجراء الاعتماد والساعات</th></tr></thead>
+                        <tbody>{pending_att_rows}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl shadow-md p-6">
+                <h2 class="text-md font-bold text-gray-800 mb-4">سجل الغيابات المعتمدة وساعات التغيب المسجلة</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-right">
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">التلميذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">الأستاذ</th><th class="py-2.5 px-3">التاريخ</th><th class="py-2.5 px-3">ساعات التغيب</th></tr></thead>
+                        <tbody>{approved_att_rows}</tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </body></html>
     """
 
+
+# ==============================================================================
+# لوحة السيد الناظر
+# ==============================================================================
 
 @app.route("/deputy/dashboard-view")
 @login_required
 def deputy_dashboard_view():
     if session.get("role") != "inspector_deputy":
         return redirect(url_for("home"))
-    logs = LessonLog.query.all()
-    rows = "".join([f"<tr class='border-b'><td class='py-3 px-4'>{l.teacher_name}</td><td class='py-3 px-4'>{l.section_name}</td><td class='py-3 px-4 font-bold'>{l.lesson_title}</td><td class='py-3 px-4'>{l.content}</td><td class='py-3 px-4'>{l.date}</td></tr>" for l in logs]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400'>لا توجد دروس مسجلة.</td></tr>"
+    approved_logs = LessonLog.query.filter_by(approval_status="approved").all()
+    total_hrs = sum(float(l.hours or 0) for l in approved_logs)
+    rows = "".join([
+        f"<tr class='border-b text-xs'><td class='py-3 px-4'>{l.teacher_name}</td><td class='py-3 px-4'>{l.section_name}</td><td class='py-3 px-4 font-bold'>{l.lesson_title}</td><td class='py-3 px-4'>{l.content}</td><td class='py-3 px-4 font-bold'>{format_hours(l.hours)} سا</td><td class='py-3 px-4'>{l.date}</td></tr>"
+        for l in approved_logs
+    ]) or "<tr><td colspan='6' class='text-center py-4 text-gray-400'>لا توجد دروس معتمدة بعد.</td></tr>"
     return f"""
-    <html lang="ar" dir="rtl"><head><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
+    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
     <body class="bg-slate-100 min-h-screen p-6">
         <div class="max-w-5xl mx-auto space-y-6">
             <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-indigo-600">
-                <div><h1 class="text-xl font-bold text-gray-800">التنسيق البيداغوجي - السيد الناظر</h1><p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد</p></div>
+                <div>
+                    <h1 class="text-xl font-bold text-gray-800">التنسيق البيداغوجي - السيد الناظر</h1>
+                    <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد | إجمالي الساعات المعتمدة: {format_hours(total_hrs)} سا</p>
+                </div>
                 <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
             </div>
             <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">متابعة دفاتر النصوص الرقمية</h2>
-                <table class="w-full text-right">
-                    <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-3 px-4">الأستاذ</th><th class="py-3 px-4">القسم</th><th class="py-3 px-4">الدرس</th><th class="py-3 px-4">المحتوى</th><th class="py-3 px-4">التاريخ</th></tr></thead>
-                    <tbody>{rows}</tbody>
-                </table>
+                <h2 class="text-md font-bold text-gray-800 mb-4">متابعة دفاتر النصوص المعتمدة</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-right">
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-3 px-4">الأستاذ</th><th class="py-3 px-4">القسم</th><th class="py-3 px-4">الدرس</th><th class="py-3 px-4">المحتوى</th><th class="py-3 px-4">الساعات</th><th class="py-3 px-4">التاريخ</th></tr></thead>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </body></html>
     """
 
 
+# ==============================================================================
+# لوحة السيد المدير
+# ==============================================================================
+
 @app.route("/director/dashboard-view")
 @login_required
 def director_dashboard_view():
     if session.get("role") != "director":
         return redirect(url_for("home"))
+
+    approved_att = Attendance.query.filter_by(approval_status="approved").all()
+    approved_les = LessonLog.query.filter_by(approval_status="approved").all()
+
+    total_absent_hours = sum(float(a.hours or 0) for a in approved_att)
+    total_approved_lesson_hours = sum(float(l.hours or 0) for l in approved_les)
+    declared_teachers = get_declared_teachers()
+
+    declared_teachers_html = "".join([
+        f"""<div class='bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs flex justify-between items-center'>
+            <span class='font-bold text-slate-800'>{t.fullname}</span>
+            <span class='bg-blue-100 text-blue-900 font-extrabold px-3 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>
+        </div>"""
+        for t in declared_teachers
+    ]) or "<p class='text-xs text-slate-400'>لا توجد حجوم ساعية محددة من طرف الأساتذة بعد.</p>"
+
     return f"""
-    <html lang="ar" dir="rtl"><head><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
+    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
     <body class="bg-slate-100 min-h-screen p-6">
-        <div class="max-w-5xl mx-auto space-y-6">
-            <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-blue-800">
-                <div><h1 class="text-xl font-bold text-gray-800">لوحة القيادة الشاملة - السيد المدير</h1><p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد</p></div>
-                <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
+        <div class="max-w-6xl mx-auto space-y-6">
+            <div class="bg-white rounded-2xl shadow-md p-6 border-r-8 border-blue-800 space-y-4">
+                <div class="flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                        <h1 class="text-xl font-bold text-gray-800">لوحة القيادة الشاملة - السيد المدير</h1>
+                        <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
+                    </div>
+                    <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                        <div class="text-xs font-bold text-emerald-700">إجمالي ساعات الحصص المعتمدة</div>
+                        <div class="text-xl font-extrabold text-emerald-950 mt-1">{format_hours(total_approved_lesson_hours)} ساعة</div>
+                    </div>
+                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-4">
+                        <div class="text-xs font-bold text-rose-700">إجمالي ساعات التغيب المسجلة</div>
+                        <div class="text-xl font-extrabold text-rose-950 mt-1">{format_hours(total_absent_hours)} ساعة</div>
+                    </div>
+                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                        <div class="text-xs font-bold text-blue-700">أساتذة حددوا حجمهم الساعي</div>
+                        <div class="text-xl font-extrabold text-blue-950 mt-1">{len(declared_teachers)}</div>
+                    </div>
+                </div>
+
+                <div class="border-t pt-4 space-y-2">
+                    <div class="text-xs font-bold text-slate-700">الحجم الساعي الفعلي للأساتذة (يظهر فقط بعد أن يحدده الأستاذ):</div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                        {declared_teachers_html}
+                    </div>
+                </div>
             </div>
+
             <div class="bg-white rounded-2xl shadow-md p-6">
-                <p class="text-sm text-gray-700">مرحباً بك سيادة المدير. إشراف شامل ومتابعة لحظية لسيرورة الانضباط والغيابات ودفاتر النصوص.</p>
+                <p class="text-sm text-gray-700">مرحباً بك سيادة المدير. تُحتسب الساعات في مؤشراتك بعد موافقة الحارس العام، ويظهر الحجم الساعي لكل أستاذ فور قيامه بتحديده.</p>
             </div>
         </div>
     </body></html>
