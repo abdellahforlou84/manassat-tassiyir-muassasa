@@ -1689,17 +1689,33 @@ def director_dashboard_view():
         </div>
     </body></html>
     """
-
 # ==============================================================================
 # [بداية التعديل المنفرد] دفتر النصوص المباشر + الغياب المشترك + تقرير الحارس العام للمدير
 # يمكن تعديل هذا الجزء بشكل مستقل في أي وقت دون المساس ببقية الكود
 # ==============================================================================
 
-# --- 1. إعدادات قابلة للتعديل بسهولة ---
 MOD_SECTION_TITLE = "ملحق التسيير المباشر وتقارير الاستشارة"
 COUNSELOR_ROLES = ("counselor", "advisor", "guidance_counselor")
 DIRECTOR_ROLES = ("director", "principal")
 TEACHER_ROLES = ("teacher",)
+
+
+def _mod_override_route(rule, endpoint_name, **options):
+    """استبدال أي مسار أو endpoint سابق بأمان دون إثارة AssertionError."""
+    old_endpoints = [
+        r.endpoint for r in app.url_map.iter_rules() if r.rule == rule
+    ]
+    for ep in set(old_endpoints):
+        app.view_functions.pop(ep, None)
+    app.url_map._rules = [r for r in app.url_map._rules if r.rule != rule]
+    app.url_map._rules_by_endpoint.pop(endpoint_name, None)
+    for ep in set(old_endpoints):
+        app.url_map._rules_by_endpoint.pop(ep, None)
+    app.view_functions.pop(endpoint_name, None)
+
+    options["endpoint"] = endpoint_name
+    return app.route(rule, **options)
+
 
 # إنشاء جدول خاص بتقارير الحارس العام المرفوعة للمدير إذا لم يكن موجوداً
 with app.app_context():
@@ -1759,7 +1775,7 @@ def _mod_build_counselor_report_data():
 
 
 # --- 2. مسارات دفتر النصوص المباشر والإرسال للمدير (خاص بالأستاذ) ---
-@app.route("/teacher/submit-lesson", methods=["POST"], endpoint="submit_lesson")
+@_mod_override_route("/teacher/submit-lesson", "submit_lesson", methods=["POST"])
 @login_required
 def mod_submit_lesson():
     if session.get("role") not in TEACHER_ROLES:
@@ -1777,7 +1793,6 @@ def mod_submit_lesson():
         hours_val = 1.0
 
     if sec and title and content and date:
-        # يُسجّل مباشرة كـ "approved" عند الأستاذ دون انتظار موافقة الحارس العام
         db.session.add(
             LessonLog(
                 teacher_username=session.get("username"),
@@ -1797,7 +1812,7 @@ def mod_submit_lesson():
     return redirect(url_for("teacher_dashboard_view", section=sec))
 
 
-@app.route("/teacher/send-lesson-to-director/<int:lid>", methods=["POST"], endpoint="mod_send_lesson_to_director")
+@_mod_override_route("/teacher/send-lesson-to-director/<int:lid>", "mod_send_lesson_to_director", methods=["POST"])
 @login_required
 def mod_send_lesson_to_director(lid):
     if session.get("role") not in TEACHER_ROLES:
@@ -1813,7 +1828,7 @@ def mod_send_lesson_to_director(lid):
 
 
 # --- 3. تسجيل الغياب في لوحة الأستاذ والحارس العام في نفس الوقت ---
-@app.route("/teacher/mark-absence", methods=["POST"], endpoint="mark_absence")
+@_mod_override_route("/teacher/mark-absence", "mark_absence", methods=["POST"])
 @login_required
 def mod_mark_absence():
     if session.get("role") not in TEACHER_ROLES:
@@ -1834,7 +1849,6 @@ def mod_mark_absence():
     if student_name and section_name and date:
         existing = Attendance.query.filter_by(student_name=student_name, date=date).first()
         if not existing:
-            # يُسجّل مباشرة في لوحة الأستاذ والحارس العام في الوقت نفسه
             db.session.add(
                 Attendance(
                     student_name=student_name,
@@ -1857,7 +1871,7 @@ def mod_mark_absence():
 
 
 # --- 4. لوحة الأستاذ المحدّثة (دفتر نصوص مستقل + إرسال للمدير فقط) ---
-@app.route("/teacher/dashboard-view", endpoint="teacher_dashboard_view")
+@_mod_override_route("/teacher/dashboard-view", "teacher_dashboard_view", methods=["GET"])
 @login_required
 def mod_teacher_dashboard_view():
     if session.get("role") not in TEACHER_ROLES:
@@ -2036,7 +2050,7 @@ def mod_teacher_dashboard_view():
 
 
 # --- 5. لوحة الحارس العام وتقرير الغيابات (تلاميذ + أساتذة + أعضاء الاستشارة) ورفعه للمدير ---
-@app.route("/counselor/submit-report-to-director", methods=["POST"], endpoint="mod_submit_report_to_director")
+@_mod_override_route("/counselor/submit-report-to-director", "mod_submit_report_to_director", methods=["POST"])
 @login_required
 def mod_submit_report_to_director():
     if session.get("role") not in COUNSELOR_ROLES:
@@ -2079,7 +2093,7 @@ def mod_submit_report_to_director():
     return redirect(url_for("counselor_dashboard_view"))
 
 
-@app.route("/counselor/dashboard-view", endpoint="counselor_dashboard_view")
+@_mod_override_route("/counselor/dashboard-view", "counselor_dashboard_view", methods=["GET"])
 @login_required
 def mod_counselor_dashboard_view():
     if session.get("role") not in COUNSELOR_ROLES:
@@ -2175,7 +2189,7 @@ def mod_counselor_dashboard_view():
 
 
 # --- 6. لوحة المدير (عرض الحصص المرسلة له فقط + تقارير الحارس العام المرفوعة) ---
-@app.route("/director/dashboard-view", endpoint="director_dashboard_view")
+@_mod_override_route("/director/dashboard-view", "director_dashboard_view", methods=["GET"])
 @login_required
 def mod_director_dashboard_view():
     if session.get("role") not in DIRECTOR_ROLES:
@@ -2201,79 +2215,7 @@ def mod_director_dashboard_view():
     ]) or "<p class='text-xs text-slate-400'>لا توجد حجوم ساعية محددة من طرف الأساتذة بعد.</p>"
 
     sent_lessons_rows = "".join([
-        f"<tr class='border-b text-xs'><td class='py-2.5 px-3'>{l.teacher_name}</td><td class='py-2.5 px-3'>{l.section_name}</td><td class='py-2.5 px-3 font-bold'>{l.lesson_title}</td><td class='py-2.5 px-3 font-bold'>{format_hours(l.hours)} سا</td><td class='py-2.5 px-3'>{l.date}</td></tr>"
-        for l in reversed(sent_lessons)
-    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لم يرسل أي أستاذ حصصاً للمدير بعد.</td></tr>"
-
-    reports_rows = "".join([
-        f"<tr class='border-b text-xs'><td class='py-2.5 px-3 font-bold'>{r[1] or '-'}</td><td class='py-2.5 px-3'>{r[2] or '-'}</td><td class='py-2.5 px-3'>{r[3]} ({format_hours(r[4])} سا)</td><td class='py-2.5 px-3'>{r[5]} ({format_hours(r[6])} سا)</td><td class='py-2.5 px-3 font-bold'>{r[7]}</td></tr>"
-        for r in reports
-    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد تقارير مرفوعة من الحارس العام بعد.</td></tr>"
-
-    return f"""
-    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
-    <body class="bg-slate-100 min-h-screen p-6">
-        <div class="max-w-6xl mx-auto space-y-6">
-            <div class="bg-white rounded-2xl shadow-md p-6 border-r-8 border-blue-800 space-y-4">
-                <div class="flex flex-wrap justify-between items-center gap-2">
-                    <div>
-                        <h1 class="text-xl font-bold text-gray-800">لوحة القيادة الشاملة - السيد المدير</h1>
-                        <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
-                    </div>
-                    <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-rose-700">غيابات التلاميذ (آخر تقرير مرفوع)</div>
-                        <div class="text-base font-extrabold text-rose-950 mt-1">{latest_student_abs}</div>
-                    </div>
-                    <div class="bg-orange-50 border border-orange-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-orange-800">غيابات الأساتذة (آخر تقرير مرفوع)</div>
-                        <div class="text-base font-extrabold text-orange-950 mt-1">{latest_teacher_abs}</div>
-                    </div>
-                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-amber-800">أعضاء الاستشارة (آخر تقرير مرفوع)</div>
-                        <div class="text-base font-extrabold text-amber-950 mt-1">{latest_counselor_cnt}</div>
-                    </div>
-                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-blue-700">أساتذة حددوا حجمهم الساعي</div>
-                        <div class="text-base font-extrabold text-blue-950 mt-1">{len(declared_teachers)}</div>
-                    </div>
-                </div>
-
-                <div class="border-t pt-3 space-y-2">
-                    <div class="text-xs font-bold text-slate-700">الحجم الساعي الفعلي للأساتذة (يظهر فقط بعد أن يحدده الأستاذ):</div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">{declared_teachers_html}</div>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">تقارير الغيابات المرفوعة من الحارس العام (التلاميذ، الأساتذة، وأعضاء الاستشارة)</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">الحارس العام</th><th class="py-2.5 px-3">تاريخ الرفع</th><th class="py-2.5 px-3">غيابات التلاميذ</th><th class="py-2.5 px-3">غيابات الأساتذة</th><th class="py-2.5 px-3">أعضاء الاستشارة</th></tr></thead>
-                        <tbody>{reports_rows}</tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">حصص دفتر النصوص المرسلة للمدير فقط</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">الأستاذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">الدرس</th><th class="py-2.5 px-3">الساعات</th><th class="py-2.5 px-3">التاريخ</th></tr></thead>
-                        <tbody>{sent_lessons_rows}</tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </body></html>
-    """
-
-# ==============================================================================
-# [نهاية التعديل المنفرد]
-# ==============================================================================
+        f"<tr class='border-b text-xs'><td class='py-2.5 px-3'>{l.teacher_name}</td><td class='py-2.5 px-3'>{l.section_name}</td><td class='py-2.5 px-3 font
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
