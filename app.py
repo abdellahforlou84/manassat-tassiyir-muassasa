@@ -1,11 +1,11 @@
 # ==============================================================================
 # منصة تسيير المؤسسة - ثانوية الشهيد قوديد أحمد (سيدي الشحمي)
-# النسخة الكاملة الموحّدة البديلة (اعتماد الحارس العام + الحجم الساعي المتغير + مؤشرات اللوحات)
+# النسخة المطوّرة: أرشيف سنوي للغيابات + عرض الأقسام للحارس العام + غياب الأستاذ + مؤشرات الأستاذ الأسبوعية
 # ==============================================================================
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (
@@ -47,6 +47,9 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
 ROLES = ["teacher", "counselor", "inspector_deputy", "director"]
+COUNSELOR_ROLES = ("counselor", "advisor", "guidance_counselor")
+DIRECTOR_ROLES = ("director", "principal")
+TEACHER_ROLES = ("teacher",)
 
 OFFICIAL_SECTIONS = [
     "1أ1", "1أ2", "1أ3", "1ع1", "1ع2", "1ع3", "1ع4", "1ع5", "1ع6",
@@ -67,7 +70,7 @@ class User(db.Model):
     role = db.Column(db.String(50), nullable=False, default="teacher")
     fullname = db.Column(db.String(120), nullable=False)
     sections_json = db.Column(db.Text, nullable=False, default="[]")
-    weekly_hours = db.Column(db.Float, nullable=True)  # يحددها الأستاذ بنفسه
+    weekly_hours = db.Column(db.Float, nullable=True)  # الساعات الفعلية الأسبوعية يحددها الأستاذ
 
     @property
     def password(self):
@@ -120,7 +123,7 @@ class Attendance(db.Model):
     date = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), default="غائب")
     hours = db.Column(db.Float, nullable=False, default=1.0)
-    approval_status = db.Column(db.String(20), nullable=False, default="pending")  # pending | approved | rejected
+    approval_status = db.Column(db.String(20), nullable=False, default="approved")
     approved_by = db.Column(db.String(120), nullable=True)
 
 
@@ -133,7 +136,7 @@ class LessonLog(db.Model):
     content = db.Column(db.Text, nullable=False)
     date = db.Column(db.String(50), nullable=False)
     hours = db.Column(db.Float, nullable=False, default=1.0)
-    approval_status = db.Column(db.String(20), nullable=False, default="pending")  # pending | approved | rejected
+    approval_status = db.Column(db.String(20), nullable=False, default="approved")
     approved_by = db.Column(db.String(120), nullable=True)
 
 
@@ -609,14 +612,48 @@ def ensure_schema_columns():
             if "hours" not in cols:
                 _add_column_if_missing(conn, "lesson_log", "hours", "FLOAT DEFAULT 1.0")
             if "approval_status" not in cols:
-                _add_column_if_missing(conn, "lesson_log", "approval_status", "VARCHAR(20) DEFAULT 'pending'")
+                _add_column_if_missing(conn, "lesson_log", "approval_status", "VARCHAR(20) DEFAULT 'approved'")
             if "approved_by" not in cols:
                 _add_column_if_missing(conn, "lesson_log", "approved_by", "VARCHAR(120)")
+
+
+def _ensure_extra_tables():
+    """إنشاء جداول غياب الأساتذة وتقارير الحارس العام المرفوعة للمدير."""
+    is_pg = db.engine.dialect.name == "postgresql"
+    pk_col = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    with db.engine.begin() as conn:
+        conn.execute(text(f"""
+            CREATE TABLE IF NOT EXISTS teacher_attendance (
+                id {pk_col},
+                teacher_username VARCHAR(80),
+                teacher_name VARCHAR(120),
+                section_name VARCHAR(100),
+                date VARCHAR(50),
+                hours FLOAT DEFAULT 1.0,
+                recorded_by VARCHAR(120)
+            )
+        """))
+        conn.execute(text(f"""
+            CREATE TABLE IF NOT EXISTS counselor_director_report (
+                id {pk_col},
+                counselor_username VARCHAR(80),
+                counselor_name VARCHAR(120),
+                created_at VARCHAR(50),
+                total_student_absences INTEGER DEFAULT 0,
+                total_student_absent_hours FLOAT DEFAULT 0.0,
+                total_teacher_absences INTEGER DEFAULT 0,
+                total_teacher_absent_hours FLOAT DEFAULT 0.0,
+                counselor_members_count INTEGER DEFAULT 0,
+                report_summary TEXT,
+                sent_to_director BOOLEAN DEFAULT TRUE
+            )
+        """))
 
 
 def init_database():
     db.create_all()
     ensure_schema_columns()
+    _ensure_extra_tables()
 
     if not User.query.first():
         db.session.add_all([
@@ -654,11 +691,11 @@ def login_required(f):
 
 
 def redirect_by_role(role):
-    if role == "teacher":
+    if role in TEACHER_ROLES:
         return redirect(url_for("teacher_dashboard_view"))
-    if role == "counselor":
+    if role in COUNSELOR_ROLES:
         return redirect(url_for("counselor_dashboard_view"))
-    if role == "director":
+    if role in DIRECTOR_ROLES:
         return redirect(url_for("director_dashboard_view"))
     if role == "inspector_deputy":
         return redirect(url_for("deputy_dashboard_view"))
@@ -677,6 +714,79 @@ def get_declared_teachers():
     """يرجع فقط الأساتذة الذين حددوا حجمهم الساعي الفعلي."""
     teachers = User.query.filter_by(role="teacher").all()
     return [t for t in teachers if t.weekly_hours is not None and float(t.weekly_hours) > 0]
+
+
+def _parse_date_safe(date_str):
+    if not date_str:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(str(date_str).strip()[:10], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_in_current_week(date_str):
+    """يتحقق إن كان التاريخ يقع ضمن الأسبوع الحالي (من السبت أو الاثنين حسب التقويم المرجعي)."""
+    dt = _parse_date_safe(date_str)
+    if not dt:
+        return False
+    now = datetime.now()
+    start_of_week = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end_of_week = start_of_week + timedelta(days=7)
+    return start_of_week <= dt < end_of_week
+
+
+def _get_teacher_absences_rows():
+    """إرجاع قائمة غيابات الأساتذة المسجلة."""
+    _ensure_extra_tables()
+    rows = db.session.execute(
+        text(
+            "SELECT id, teacher_username, teacher_name, section_name, date, hours, recorded_by "
+            "FROM teacher_attendance ORDER BY id DESC"
+        )
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "teacher_username": r[1] or "",
+            "teacher_name": r[2] or "أستاذ غير محدد",
+            "section_name": r[3] or "",
+            "date": r[4] or "",
+            "hours": float(r[5] or 1.0),
+            "recorded_by": r[6] or "",
+        }
+        for r in rows
+    ]
+
+
+def _get_teacher_weekly_absence_hours(teacher_uname, teacher_fullname, assigned_sections):
+    """حساب ساعات الغياب في الأسبوع الحالي للأستاذ (من غياباته المسجلة أو غيابات أقسامه في نفس الأسبوع)."""
+    t_rows = _get_teacher_absences_rows()
+    weekly_teacher_hrs = sum(
+        r["hours"]
+        for r in t_rows
+        if (
+            (teacher_uname and r["teacher_username"] == teacher_uname)
+            or (teacher_fullname and r["teacher_name"] == teacher_fullname)
+        )
+        and _is_in_current_week(r["date"])
+    )
+
+    student_atts = Attendance.query.filter_by(teacher_username=teacher_uname).all()
+    if not student_atts and assigned_sections:
+        student_atts = Attendance.query.filter(Attendance.section_name.in_(assigned_sections)).all()
+
+    weekly_student_hrs = sum(
+        float(a.hours or 1.0)
+        for a in student_atts
+        if _is_in_current_week(a.date)
+    )
+
+    return weekly_teacher_hrs, weekly_student_hrs
 
 
 # ==============================================================================
@@ -804,7 +914,7 @@ REGISTER_PAGE_HTML = """
                 </select>
             </div>
             <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">الحجم الساعي الفعلي الأسبوعي (اختياري للأستاذ — يُحدَّد لاحقاً من لوحة الأستاذ)</label>
+                <label class="block text-sm font-semibold text-gray-700 mb-1">الساعات الفعلية الأسبوعية (اختياري للأستاذ — يُحدَّد لاحقاً من لوحة الأستاذ)</label>
                 <input type="number" step="0.5" min="1" max="50" name="weekly_hours" placeholder="مثال: 13 أو 16" class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
             </div>
             <div>
@@ -1032,13 +1142,13 @@ def recover_account():
 
 
 # ==============================================================================
-# مسارات الأستاذ المساعدة (الساعات والأقسام)
+# مسارات الأستاذ (الساعات الفعلية + الأقسام + الغيابات + دفتر النصوص)
 # ==============================================================================
 
 @app.route("/teacher/set-hours", methods=["POST"])
 @login_required
 def set_teacher_hours():
-    if session.get("role") != "teacher":
+    if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
     raw_hours = (request.form.get("weekly_hours") or "").strip()
     try:
@@ -1049,16 +1159,16 @@ def set_teacher_hours():
         if user:
             user.weekly_hours = val
             db.session.commit()
-            flash("تم حفظ الحجم الساعي بنجاح.", "success")
+            flash("تم حفظ الساعات الفعلية بنجاح.", "success")
     except ValueError:
-        pass
+        flash("يرجى إدخال عدد ساعات صحيح موجب.", "danger")
     return redirect(url_for("teacher_dashboard_view"))
 
 
 @app.route("/teacher/add-section", methods=["POST"])
 @login_required
 def add_section():
-    if session.get("role") != "teacher":
+    if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
     sec = request.form.get("section_name")
     uname = session.get("username")
@@ -1070,13 +1180,14 @@ def add_section():
         if user and sec not in user.sections:
             user.sections = user.sections + [sec]
         db.session.commit()
+        flash(f"تمت إضافة القسم {sec} إلى أقسامك.", "success")
     return redirect(url_for("teacher_dashboard_view", section=sec))
 
 
 @app.route("/teacher/remove-section/<int:sid>")
 @login_required
 def remove_section(sid):
-    if session.get("role") != "teacher":
+    if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
     ts = TeacherSection.query.get(sid)
     if ts and ts.teacher_username == session.get("username"):
@@ -1086,226 +1197,60 @@ def remove_section(sid):
         if user and sec_name in user.sections:
             user.sections = [s for s in user.sections if s != sec_name]
         db.session.commit()
+        flash(f"تم حذف القسم {sec_name} من أقسامك.", "success")
     return redirect(url_for("teacher_dashboard_view"))
 
 
-# ==============================================================================
-# مسارات الحارس العام المساعدة (اعتماد/رفض الحصص والغيابات)
-# ==============================================================================
-
-@app.route("/counselor/approve-lesson/<int:lid>", methods=["POST"])
+@app.route("/teacher/mark-absence", methods=["POST"])
 @login_required
-def approve_lesson(lid):
-    if session.get("role") != "counselor":
+def mark_absence():
+    if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
-    lesson = LessonLog.query.get(lid)
-    if lesson:
-        try:
-            hrs = float(request.form.get("hours") or lesson.hours or 1.0)
-            if hrs > 0:
-                lesson.hours = hrs
-        except ValueError:
-            pass
-        lesson.approval_status = "approved"
-        lesson.approved_by = session.get("fullname")
-        db.session.commit()
-    return redirect(url_for("counselor_dashboard_view"))
 
+    student_name = (request.form.get("student_name") or "").strip()
+    section_name = (request.form.get("section_name") or "").strip()
+    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
+    selected_section = (request.form.get("selected_section") or section_name).strip()
 
-@app.route("/counselor/reject-lesson/<int:lid>", methods=["POST"])
-@login_required
-def reject_lesson(lid):
-    if session.get("role") != "counselor":
-        return redirect(url_for("home"))
-    lesson = LessonLog.query.get(lid)
-    if lesson:
-        lesson.approval_status = "rejected"
-        lesson.approved_by = session.get("fullname")
-        db.session.commit()
-    return redirect(url_for("counselor_dashboard_view"))
+    try:
+        hours_val = float(request.form.get("hours") or 1.0)
+        if hours_val <= 0:
+            hours_val = 1.0
+    except ValueError:
+        hours_val = 1.0
 
-
-@app.route("/counselor/approve-attendance/<int:aid>", methods=["POST"])
-@login_required
-def approve_attendance(aid):
-    if session.get("role") != "counselor":
-        return redirect(url_for("home"))
-    att = Attendance.query.get(aid)
-    if att:
-        try:
-            hrs = float(request.form.get("hours") or att.hours or 1.0)
-            if hrs > 0:
-                att.hours = hrs
-        except ValueError:
-            pass
-        att.approval_status = "approved"
-        att.approved_by = session.get("fullname")
-        db.session.commit()
-    return redirect(url_for("counselor_dashboard_view"))
-
-
-@app.route("/counselor/reject-attendance/<int:aid>", methods=["POST"])
-@login_required
-def reject_attendance(aid):
-    if session.get("role") != "counselor":
-        return redirect(url_for("home"))
-    att = Attendance.query.get(aid)
-    if att:
-        att.approval_status = "rejected"
-        att.approved_by = session.get("fullname")
-        db.session.commit()
-    return redirect(url_for("counselor_dashboard_view"))
-
-
-# ==============================================================================
-# لوحة السيد الناظر
-# ==============================================================================
-
-@app.route("/deputy/dashboard-view")
-@login_required
-def deputy_dashboard_view():
-    if session.get("role") != "inspector_deputy":
-        return redirect(url_for("home"))
-    approved_logs = LessonLog.query.filter_by(approval_status="approved").all()
-    total_hrs = sum(float(l.hours or 0) for l in approved_logs)
-    rows = "".join([
-        (
-            "<tr class='border-b text-xs'>"
-            f"<td class='py-3 px-4'>{l.teacher_name}</td>"
-            f"<td class='py-3 px-4'>{l.section_name}</td>"
-            f"<td class='py-3 px-4 font-bold'>{l.lesson_title}</td>"
-            f"<td class='py-3 px-4'>{l.content}</td>"
-            f"<td class='py-3 px-4 font-bold'>{format_hours(l.hours)} سا</td>"
-            f"<td class='py-3 px-4'>{l.date}</td>"
-            "</tr>"
-        )
-        for l in approved_logs
-    ]) or "<tr><td colspan='6' class='text-center py-4 text-gray-400'>لا توجد دروس معتمدة بعد.</td></tr>"
-    return f"""
-    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
-    <body class="bg-slate-100 min-h-screen p-6">
-        <div class="max-w-5xl mx-auto space-y-6">
-            <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-indigo-600">
-                <div>
-                    <h1 class="text-xl font-bold text-gray-800">التنسيق البيداغوجي - السيد الناظر</h1>
-                    <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد | إجمالي الساعات المعتمدة: {format_hours(total_hrs)} سا</p>
-                </div>
-                <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
-            </div>
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">متابعة دفاتر النصوص المعتمدة</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-3 px-4">الأستاذ</th><th class="py-3 px-4">القسم</th><th class="py-3 px-4">الدرس</th><th class="py-3 px-4">المحتوى</th><th class="py-3 px-4">الساعات</th><th class="py-3 px-4">التاريخ</th></tr></thead>
-                        <tbody>{rows}</tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </body></html>
-    """
-
-
-# ==============================================================================
-# [بداية التعديل المنفرد] دفتر النصوص المباشر + الغياب المشترك + تقرير الحارس العام للمدير
-# ==============================================================================
-
-MOD_SECTION_TITLE = "ملحق التسيير المباشر وتقارير الاستشارة"
-COUNSELOR_ROLES = ("counselor", "advisor", "guidance_counselor")
-DIRECTOR_ROLES = ("director", "principal")
-TEACHER_ROLES = ("teacher",)
-
-
-def _mod_bind_view(rule, endpoint_name, view_func, **options):
-    """ربط أو استبدال endpoint بأمان دون إسناد خاصية _rules للقراءة فقط."""
-    app.view_functions[endpoint_name] = view_func
-    existing_rule = None
-    for r in app.url_map.iter_rules():
-        if r.rule == rule:
-            existing_rule = r
-            break
-
-    if existing_rule is not None:
-        old_ep = existing_rule.endpoint
-        if old_ep != endpoint_name and old_ep in app.url_map._rules_by_endpoint:
-            app.url_map._rules_by_endpoint[old_ep] = [
-                r for r in app.url_map._rules_by_endpoint[old_ep] if r != existing_rule
-            ]
-        existing_rule.endpoint = endpoint_name
-        ep_rules = app.url_map._rules_by_endpoint.setdefault(endpoint_name, [])
-        if existing_rule not in ep_rules:
-            ep_rules.append(existing_rule)
-    else:
-        options["endpoint"] = endpoint_name
-        app.add_url_rule(rule, view_func=view_func, **options)
-
-    return view_func
-
-
-def _mod_ensure_report_table():
-    """إنشاء جدول تقارير الحارس العام المرفوعة للمدير إن لم يكن موجوداً."""
-    with db.engine.begin() as conn:
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS counselor_director_report (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                counselor_username VARCHAR(80),
-                counselor_name VARCHAR(120),
-                created_at VARCHAR(50),
-                total_student_absences INTEGER DEFAULT 0,
-                total_student_absent_hours FLOAT DEFAULT 0.0,
-                total_teacher_absences INTEGER DEFAULT 0,
-                total_teacher_absent_hours FLOAT DEFAULT 0.0,
-                counselor_members_count INTEGER DEFAULT 0,
-                report_summary TEXT,
-                sent_to_director BOOLEAN DEFAULT 1
+    if student_name and section_name and date:
+        existing = Attendance.query.filter_by(
+            student_name=student_name, section_name=section_name, date=date
+        ).first()
+        if not existing:
+            db.session.add(
+                Attendance(
+                    student_name=student_name,
+                    section_name=section_name,
+                    teacher_username=session.get("username"),
+                    teacher_name=session.get("fullname"),
+                    date=date,
+                    status="غائب",
+                    hours=hours_val,
+                    approval_status="approved",
+                    approved_by="مرفوع للحارس العام (أرشيف سنوي)",
+                )
             )
-        """))
+            db.session.commit()
+            flash(
+                f"تم تسجيل غياب ({student_name}) في القسم {section_name} وحفظه في الأرشيف السنوي ورفعه للحارس العام.",
+                "success",
+            )
+        else:
+            flash("غياب هذا التلميذ مسجل مسبقاً في هذا التاريخ والقسم.", "danger")
+
+    return redirect(url_for("teacher_dashboard_view", section=selected_section))
 
 
-with app.app_context():
-    _mod_ensure_report_table()
-
-
-def _mod_get_counselor_members():
-    """إرجاع قائمة أعضاء الاستشارة التربوية المسجلين في النظام."""
-    return User.query.filter(User.role.in_(COUNSELOR_ROLES)).all()
-
-
-def _mod_get_teacher_absences_stats():
-    """إحصاء غيابات الأساتذة المسجلة إن وُجد جدول أو سجل خاص بها."""
-    inspector = inspect(db.engine)
-    if "teacher_attendance" in inspector.get_table_names():
-        rows = db.session.execute(
-            text("SELECT teacher_name, hours FROM teacher_attendance")
-        ).fetchall()
-        count = len(rows)
-        hours = sum(float(r[1] or 0) for r in rows)
-        return count, hours, rows
-    return 0, 0.0, []
-
-
-def _mod_build_counselor_report_data():
-    """تجميع إحصائيات غيابات التلاميذ والأساتذة وأعضاء الاستشارة."""
-    student_absences = Attendance.query.all()
-    student_absence_count = len(student_absences)
-    student_absence_hours = sum(float(a.hours or 1.0) for a in student_absences)
-
-    teacher_absence_count, teacher_absence_hours, _ = _mod_get_teacher_absences_stats()
-    counselor_members = _mod_get_counselor_members()
-
-    return {
-        "student_absence_count": student_absence_count,
-        "student_absence_hours": student_absence_hours,
-        "teacher_absence_count": teacher_absence_count,
-        "teacher_absence_hours": teacher_absence_hours,
-        "counselor_members": counselor_members,
-        "counselor_members_count": len(counselor_members),
-    }
-
-
-# --- 2. مسارات دفتر النصوص المباشر والإرسال للمدير (خاص بالأستاذ) ---
+@app.route("/teacher/submit-lesson", methods=["POST"])
 @login_required
-def mod_submit_lesson():
+def submit_lesson():
     if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
 
@@ -1335,16 +1280,14 @@ def mod_submit_lesson():
             )
         )
         db.session.commit()
-        flash("تم تسجيل الحصة في دفتر النصوص الخاص بك مباشرة (تبقى عندك حتى ترسلها للمدير).", "success")
+        flash("تم تسجيل الحصة في دفتر النصوص الخاص بك مباشرة.", "success")
 
     return redirect(url_for("teacher_dashboard_view", section=sec))
 
 
-_mod_bind_view("/teacher/submit-lesson", "submit_lesson", mod_submit_lesson, methods=["POST"])
-
-
+@app.route("/teacher/send-lesson-to-director/<int:lid>", methods=["POST"])
 @login_required
-def mod_send_lesson_to_director(lid):
+def send_lesson_to_director(lid):
     if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
 
@@ -1352,76 +1295,41 @@ def mod_send_lesson_to_director(lid):
     if lesson and lesson.teacher_username == session.get("username"):
         lesson.approved_by = "مرسل للمدير"
         db.session.commit()
-        flash(f"تم إرسال الحصة ({lesson.lesson_title}) إلى السيد المدير فقط.", "success")
+        flash(f"تم إرسال الحصة ({lesson.lesson_title}) إلى السيد المدير.", "success")
 
     return redirect(url_for("teacher_dashboard_view", section=lesson.section_name if lesson else ""))
 
 
-_mod_bind_view("/teacher/send-lesson-to-director/<int:lid>", "mod_send_lesson_to_director", mod_send_lesson_to_director, methods=["POST"])
-
-
-# --- 3. تسجيل الغياب في لوحة الأستاذ والحارس العام في نفس الوقت ---
+@app.route("/teacher/dashboard-view")
 @login_required
-def mod_mark_absence():
-    if session.get("role") not in TEACHER_ROLES:
-        return redirect(url_for("home"))
-
-    student_name = (request.form.get("student_name") or "").strip()
-    section_name = (request.form.get("section_name") or "").strip()
-    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
-    selected_section = (request.form.get("selected_section") or section_name).strip()
-
-    try:
-        hours_val = float(request.form.get("hours") or 1.0)
-        if hours_val <= 0:
-            hours_val = 1.0
-    except ValueError:
-        hours_val = 1.0
-
-    if student_name and section_name and date:
-        existing = Attendance.query.filter_by(student_name=student_name, date=date).first()
-        if not existing:
-            db.session.add(
-                Attendance(
-                    student_name=student_name,
-                    section_name=section_name,
-                    teacher_username=session.get("username"),
-                    teacher_name=session.get("fullname"),
-                    date=date,
-                    status="غائب",
-                    hours=hours_val,
-                    approval_status="approved",
-                    approved_by="مسجل آنياً (أستاذ + حارس عام)",
-                )
-            )
-            db.session.commit()
-            flash("تم تسجيل الغياب في لوحتك ولوحة الحارس العام في الوقت نفسه.", "success")
-        else:
-            flash("غياب هذا التلميذ مسجل مسبقاً في هذا التاريخ.", "danger")
-
-    return redirect(url_for("teacher_dashboard_view", section=selected_section))
-
-
-_mod_bind_view("/teacher/mark-absence", "mark_absence", mod_mark_absence, methods=["POST"])
-
-
-# --- 4. لوحة الأستاذ المحدّثة (دفتر نصوص مستقل + إرسال للمدير فقط) ---
-@login_required
-def mod_teacher_dashboard_view():
+def teacher_dashboard_view():
     if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
 
     teacher_uname = session.get("username")
+    teacher_fullname = session.get("fullname") or ""
     teacher_user = User.query.filter_by(username=teacher_uname).first()
     today_date = datetime.now().strftime("%Y-%m-%d")
 
     assigned_sections = TeacherSection.query.filter_by(teacher_username=teacher_uname).all()
     assigned_section_names = [ts.section_name for ts in assigned_sections]
-    selected_section = request.args.get("section", assigned_section_names[0] if assigned_section_names else "")
-    students_in_section = Student.query.filter_by(section_name=selected_section).all() if selected_section else []
+    selected_section = request.args.get(
+        "section", assigned_section_names[0] if assigned_section_names else ""
+    )
+    archive_section_filter = (request.args.get("archive_section") or "").strip()
+
+    students_in_section = (
+        Student.query.filter_by(section_name=selected_section).all()
+        if selected_section
+        else []
+    )
 
     my_sections_options = "".join([
         f'<option value="{sec}" {"selected" if sec == selected_section else ""}>{sec}</option>'
+        for sec in assigned_section_names
+    ])
+    archive_filter_options = "".join([
+        f'<option value="{sec}" {"selected" if sec == archive_section_filter else ""}>{sec}</option>'
         for sec in assigned_section_names
     ])
     all_sections_options = "".join([
@@ -1438,10 +1346,25 @@ def mod_teacher_dashboard_view():
     hours_display = f"{format_hours(declared_hours)} سا/أسبوع" if declared_hours is not None else "غير محدد بعد"
     hours_input_val = format_hours(declared_hours) if declared_hours is not None else ""
 
+    weekly_teacher_abs_hrs, weekly_student_abs_hrs = _get_teacher_weekly_absence_hours(
+        teacher_uname, teacher_fullname, assigned_section_names
+    )
+    total_weekly_absence_hrs = weekly_teacher_abs_hrs + weekly_student_abs_hrs
+
     my_lessons = LessonLog.query.filter_by(teacher_username=teacher_uname).all()
-    my_absences = Attendance.query.filter_by(teacher_username=teacher_uname).all()
     sent_to_director_count = sum(1 for l in my_lessons if l.approved_by == "مرسل للمدير")
     total_lesson_hours = sum(float(l.hours or 0) for l in my_lessons)
+
+    # أرشيف الغيابات السنوي للأستاذ بالاسم واللقب
+    archive_query = Attendance.query.filter_by(teacher_username=teacher_uname)
+    if archive_section_filter:
+        archive_query = archive_query.filter_by(section_name=archive_section_filter)
+    yearly_absences = archive_query.order_by(Attendance.id.desc()).all()
+
+    flashes_html = "".join([
+        f"<div class='p-3 rounded-lg text-xs font-bold text-center border {'bg-emerald-50 text-emerald-700 border-emerald-200' if cat == 'success' else 'bg-red-50 text-red-700 border-red-200'}'>{msg}</div>"
+        for cat, msg in get_flashed_messages(with_categories=true)
+    ])
 
     attendance_rows = "".join([f"""
     <tr class="border-b hover:bg-gray-50">
@@ -1454,11 +1377,21 @@ def mod_teacher_dashboard_view():
                 <input type="hidden" name="date" value="{today_date}">
                 <input type="hidden" name="selected_section" value="{selected_section}">
                 <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" class="w-16 px-2 py-1 border rounded text-xs text-center font-bold">
-                <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">تسجيل غياب (أستاذ + حارس عام)</button>
+                <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">تسجيل غياب (أرشيف سنوي + حارس عام)</button>
             </form>
         </td>
     </tr>
     """ for s in students_in_section]) or "<tr><td colspan='3' class='text-center py-4 text-gray-400 text-xs'>اختر قسماً لعرض قائمة المناداة.</td></tr>"
+
+    yearly_archive_rows = "".join([f"""
+    <tr class="border-b hover:bg-gray-50 text-xs">
+        <td class="py-2.5 px-3 font-extrabold text-gray-900">{a.student_name}</td>
+        <td class="py-2.5 px-3 font-bold text-blue-800">{a.section_name}</td>
+        <td class="py-2.5 px-3 text-gray-700">{a.date}</td>
+        <td class="py-2.5 px-3 font-extrabold text-rose-700">{format_hours(a.hours)} سا</td>
+        <td class="py-2.5 px-3"><span class="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold">أرشيف سنوي</span></td>
+    </tr>
+    """ for a in yearly_absences]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد غيابات مسجلة في الأرشيف السنوي بعد.</td></tr>"
 
     my_sections_list_html = "".join([f"""
     <div class="flex justify-between items-center bg-gray-50 px-3 py-2 rounded-lg border text-xs">
@@ -1487,20 +1420,27 @@ def mod_teacher_dashboard_view():
     <head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
     <body class="bg-slate-100 min-h-screen p-4 md:p-6">
         <div class="max-w-6xl mx-auto space-y-6">
+            {f"<div class='space-y-2'>{flashes_html}</div>" if flashes_html else ""}
+
             <div class="bg-white rounded-2xl shadow-md p-6 border-b-4 border-blue-800 space-y-4">
                 <div class="text-center space-y-1">
                     <p class="text-xs font-bold text-gray-600">الجمهورية الجزائرية الديمقراطية الشعبية | وزارة التربية الوطنية</p>
                     <h2 class="text-lg font-extrabold text-blue-900">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</h2>
                 </div>
                 <div class="pt-3 flex flex-wrap justify-between items-center border-t text-sm gap-2">
-                    <span class="font-bold text-gray-700">الأستاذ: {session.get('fullname')} | التاريخ: {today_date}</span>
+                    <span class="font-bold text-gray-700">الأستاذ: {teacher_fullname} | التاريخ: {today_date}</span>
                     <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-100">تسجيل الخروج</a>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
                     <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-blue-700">حجمي الساعي الفعلي</div>
+                        <div class="text-[11px] font-bold text-blue-700">الساعات الفعلية</div>
                         <div class="text-base font-extrabold text-blue-950 mt-1">{hours_display}</div>
+                    </div>
+                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
+                        <div class="text-[11px] font-bold text-rose-700">ساعات الغياب في الأسبوع</div>
+                        <div class="text-base font-extrabold text-rose-950 mt-1">{format_hours(total_weekly_absence_hrs)} سا/أسبوع</div>
+                        <div class="text-[10px] text-rose-600 mt-0.5">غياب الأستاذ: {format_hours(weekly_teacher_abs_hrs)} سا | التلاميذ: {format_hours(weekly_student_abs_hrs)} سا</div>
                     </div>
                     <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
                         <div class="text-[11px] font-bold text-emerald-700">ساعات حصص دفتر النصوص</div>
@@ -1510,17 +1450,13 @@ def mod_teacher_dashboard_view():
                         <div class="text-[11px] font-bold text-indigo-700">حصص مرسلة للمدير</div>
                         <div class="text-base font-extrabold text-indigo-950 mt-1">{sent_to_director_count}</div>
                     </div>
-                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-rose-700">غيابات مسجلة من طرفي</div>
-                        <div class="text-base font-extrabold text-rose-950 mt-1">{len(my_absences)}</div>
-                    </div>
                 </div>
 
                 <form action="/teacher/set-hours" method="POST" class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3">
-                    <div class="text-xs font-bold text-slate-700">تحديد/تعديل حجمك الساعي الفعلي (يظهر للحارس العام والمدير بعد الحفظ):</div>
+                    <div class="text-xs font-bold text-slate-700">تحديد/تعديل الساعات الفعلية الأسبوعية (تظهر أمام لوحتك ولدى الحارس العام والمدير):</div>
                     <div class="flex items-center gap-2">
                         <input type="number" step="0.5" min="1" max="50" name="weekly_hours" value="{hours_input_val}" placeholder="مثال: 13" required class="w-28 px-3 py-1.5 border rounded-lg text-xs font-bold text-center bg-white">
-                        <button type="submit" class="bg-blue-700 hover:bg-blue-800 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition">حفظ الحجم الساعي</button>
+                        <button type="submit" class="bg-blue-700 hover:bg-blue-800 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition">حفظ الساعات الفعلية</button>
                     </div>
                 </form>
             </div>
@@ -1542,6 +1478,7 @@ def mod_teacher_dashboard_view():
                     <div class="flex justify-between items-center border-b pb-2">
                         <h3 class="text-md font-bold text-gray-800">قائمة المناداة وتسجيل الغيابات</h3>
                         <form method="GET" action="/teacher/dashboard-view" class="flex gap-2">
+                            <input type="hidden" name="archive_section" value="{archive_section_filter}">
                             <select name="section" onchange="this.form.submit()" class="px-3 py-1.5 rounded-lg border text-xs bg-white font-bold text-blue-800">
                                 <option value="" disabled selected>-- اختر القسم --</option>
                                 {my_sections_options}
@@ -1550,7 +1487,7 @@ def mod_teacher_dashboard_view():
                     </div>
                     <div class="overflow-x-auto max-h-96">
                         <table class="w-full text-right">
-                            <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">التلميذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3 text-center">إجراء الغياب</th></tr></thead>
+                            <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">التلميذ (الاسم واللقب)</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3 text-center">إجراء الغياب</th></tr></thead>
                             <tbody>{attendance_rows}</tbody>
                         </table>
                     </div>
@@ -1558,7 +1495,26 @@ def mod_teacher_dashboard_view():
             </div>
 
             <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
-                <h3 class="text-md font-bold text-gray-800">دفتر النصوص (تسجيل مباشر عند الأستاذ دون موافقة الحارس العام — يُرسل للمدير عند الطلب)</h3>
+                <div class="flex flex-wrap justify-between items-center border-b pb-2 gap-2">
+                    <h3 class="text-md font-bold text-gray-800">أرشيف الغيابات السنوي (بالاسم واللقب)</h3>
+                    <form method="GET" action="/teacher/dashboard-view" class="flex items-center gap-2">
+                        <input type="hidden" name="section" value="{selected_section}">
+                        <select name="archive_section" onchange="this.form.submit()" class="px-3 py-1.5 rounded-lg border text-xs bg-white font-bold text-slate-700">
+                            <option value="">كل الأقسام المسندة</option>
+                            {archive_filter_options}
+                        </select>
+                    </form>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-right">
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">الاسم واللقب</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">التاريخ</th><th class="py-2.5 px-3">الساعات</th><th class="py-2.5 px-3">السجل</th></tr></thead>
+                        <tbody>{yearly_archive_rows}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
+                <h3 class="text-md font-bold text-gray-800">دفتر النصوص (تسجيل مباشر عند الأستاذ — يُرسل للمدير عند الطلب)</h3>
                 <form action="/teacher/submit-lesson" method="POST" class="grid grid-cols-1 md:grid-cols-5 gap-3">
                     <div><select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white"><option value="" disabled selected>-- اختر القسم --</option>{my_sections_options}</select></div>
                     <div><input type="text" name="lesson_title" placeholder="عنوان الدرس..." required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
@@ -1583,23 +1539,85 @@ def mod_teacher_dashboard_view():
     """
 
 
-_mod_bind_view("/teacher/dashboard-view", "teacher_dashboard_view", mod_teacher_dashboard_view, methods=["GET"])
+# ==============================================================================
+# مسارات الحارس العام (قائمة الأقسام + تسجيل غياب الأستاذ + رفع التقرير للمدير)
+# ==============================================================================
 
-
-# --- 5. لوحة الحارس العام وتقرير الغيابات (تلاميذ + أساتذة + أعضاء الاستشارة) ورفعه للمدير ---
+@app.route("/counselor/record-teacher-absence", methods=["POST"])
 @login_required
-def mod_submit_report_to_director():
+def record_teacher_absence():
     if session.get("role") not in COUNSELOR_ROLES:
         return redirect(url_for("home"))
 
-    _mod_ensure_report_table()
-    stats = _mod_build_counselor_report_data()
+    _ensure_extra_tables()
+    teacher_uname = (request.form.get("teacher_username") or "").strip().lower()
+    section_name = (request.form.get("section_name") or "").strip()
+    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
+    try:
+        hours_val = float(request.form.get("hours") or 1.0)
+        if hours_val <= 0:
+            hours_val = 1.0
+    except ValueError:
+        hours_val = 1.0
+
+    teacher_user = User.query.filter_by(username=teacher_uname).first()
+    teacher_fullname = (
+        teacher_user.fullname
+        if teacher_user
+        else (request.form.get("teacher_name") or "").strip()
+    )
+
+    if teacher_fullname and section_name in OFFICIAL_SECTIONS and date:
+        db.session.execute(
+            text(
+                "INSERT INTO teacher_attendance ("
+                "teacher_username, teacher_name, section_name, date, hours, recorded_by"
+                ") VALUES (:u, :n, :s, :d, :h, :r)"
+            ),
+            {
+                "u": teacher_uname,
+                "n": teacher_fullname,
+                "s": section_name,
+                "d": date,
+                "h": hours_val,
+                "r": session.get("fullname"),
+            },
+        )
+        db.session.commit()
+        flash(
+            f"تم تسجيل غياب الأستاذ ({teacher_fullname}) أمام القسم {section_name} بساعة غياب ({format_hours(hours_val)} سا).",
+            "success",
+        )
+    else:
+        flash("يرجى اختيار الأستاذ والقسم والتاريخ بشكل صحيح.", "danger")
+
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+@app.route("/counselor/submit-report-to-director", methods=["POST"])
+@login_required
+def submit_report_to_director():
+    if session.get("role") not in COUNSELOR_ROLES:
+        return redirect(url_for("home"))
+
+    _ensure_extra_tables()
+    student_absences = Attendance.query.all()
+    student_absence_count = len(student_absences)
+    student_absence_hours = sum(float(a.hours or 1.0) for a in student_absences)
+
+    t_rows = _get_teacher_absences_rows()
+    teacher_absence_count = len(t_rows)
+    teacher_absence_hours = sum(float(r["hours"] or 0.0) for r in t_rows)
+
+    counselor_members = User.query.filter(User.role.in_(COUNSELOR_ROLES)).all()
+    counselor_members_count = len(counselor_members)
+
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     summary_text = (
         f"تقرير شامل بتاريخ {now_str}: "
-        f"غيابات التلاميذ ({stats['student_absence_count']} حالة / {format_hours(stats['student_absence_hours'])} سا)، "
-        f"غيابات الأساتذة ({stats['teacher_absence_count']} حالة / {format_hours(stats['teacher_absence_hours'])} سا)، "
-        f"أعضاء الاستشارة ({stats['counselor_members_count']} عضو)."
+        f"غيابات التلاميذ ({student_absence_count} حالة / {format_hours(student_absence_hours)} سا)، "
+        f"غيابات الأساتذة ({teacher_absence_count} حالة / {format_hours(teacher_absence_hours)} سا)، "
+        f"أعضاء الاستشارة ({counselor_members_count} عضو)."
     )
 
     db.session.execute(
@@ -1610,74 +1628,112 @@ def mod_submit_report_to_director():
             "total_teacher_absences, total_teacher_absent_hours, "
             "counselor_members_count, report_summary, sent_to_director"
             ") VALUES ("
-            ":u, :n, :dt, :sa, :sah, :ta, :tah, :cm, :sm, 1"
+            ":u, :n, :dt, :sa, :sah, :ta, :tah, :cm, :sm, TRUE"
             ")"
         ),
         {
             "u": session.get("username"),
             "n": session.get("fullname"),
             "dt": now_str,
-            "sa": stats["student_absence_count"],
-            "sah": stats["student_absence_hours"],
-            "ta": stats["teacher_absence_count"],
-            "tah": stats["teacher_absence_hours"],
-            "cm": stats["counselor_members_count"],
+            "sa": student_absence_count,
+            "sah": student_absence_hours,
+            "ta": teacher_absence_count,
+            "tah": teacher_absence_hours,
+            "cm": counselor_members_count,
             "sm": summary_text,
         },
     )
     db.session.commit()
-    flash("تم رفع تقرير الغيابات الشامل (التلاميذ، الأساتذة، وأعضاء الاستشارة) إلى السيد المدير.", "success")
+    flash(
+        "تم رفع تقرير الغيابات الشامل (التلاميذ، الأساتذة، وأعضاء الاستشارة) إلى السيد المدير.",
+        "success",
+    )
     return redirect(url_for("counselor_dashboard_view"))
 
 
-_mod_bind_view("/counselor/submit-report-to-director", "mod_submit_report_to_director", mod_submit_report_to_director, methods=["POST"])
-
-
+@app.route("/counselor/dashboard-view")
 @login_required
-def mod_counselor_dashboard_view():
+def counselor_dashboard_view():
     if session.get("role") not in COUNSELOR_ROLES:
         return redirect(url_for("home"))
 
-    attendances = Attendance.query.all()
-    stats = _mod_build_counselor_report_data()
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    student_absences = Attendance.query.order_by(Attendance.id.desc()).all()
+    t_rows = _get_teacher_absences_rows()
+    counselor_members = User.query.filter(User.role.in_(COUNSELOR_ROLES)).all()
+    all_teachers = User.query.filter_by(role="teacher").all()
     declared_teachers = get_declared_teachers()
 
+    student_absence_count = len(student_absences)
+    student_absence_hours = sum(float(a.hours or 1.0) for a in student_absences)
+    teacher_absence_count = len(t_rows)
+    teacher_absence_hours = sum(float(r["hours"] or 0.0) for r in t_rows)
+
+    flashes_html = "".join([
+        f"<div class='p-3 rounded-lg text-xs font-bold text-center border {'bg-emerald-50 text-emerald-700 border-emerald-200' if cat == 'success' else 'bg-red-50 text-red-700 border-red-200'}'>{msg}</div>"
+        for cat, msg in get_flashed_messages(with_categories=true)
+    ])
+
+    teacher_select_options = "".join([
+        f'<option value="{t.username}">{t.fullname}</option>'
+        for t in all_teachers
+    ]) or '<option value="teacher">الأستاذ فغلو عبد الله</option>'
+
+    section_select_options = "".join([
+        f'<option value="{sec}">{sec}</option>'
+        for sec in OFFICIAL_SECTIONS
+    ])
+
     counselor_members_html = "".join([
-        (
-            "<span class='bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1 rounded-lg text-xs font-bold'>"
-            f"{m.fullname}"
-            "</span>"
-        )
-        for m in stats["counselor_members"]
+        f"<span class='bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1 rounded-lg text-xs font-bold'>{m.fullname}</span>"
+        for m in counselor_members
     ]) or "<span class='text-xs text-gray-400'>لا يوجد أعضاء استشارة مسجلون حالياً.</span>"
 
     declared_teachers_cards = "".join([
-        (
-            "<div class='bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs flex justify-between items-center gap-3'>"
-            f"<span class='font-bold text-slate-800'>{t.fullname}</span>"
-            f"<span class='bg-blue-100 text-blue-900 font-extrabold px-2.5 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>"
-            "</div>"
-        )
+        f"<div class='bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs flex justify-between items-center gap-3'><span class='font-bold text-slate-800'>{t.fullname}</span><span class='bg-blue-100 text-blue-900 font-extrabold px-2.5 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span></div>"
         for t in declared_teachers
     ]) or "<p class='text-xs text-slate-400'>لم يحدد أي أستاذ حجمه الساعي بعد.</p>"
 
-    att_rows = "".join([
-        (
-            "<tr class='border-b text-xs'>"
-            f"<td class='py-2.5 px-3 font-bold'>{a.student_name}</td>"
-            f"<td class='py-2.5 px-3'>{a.section_name}</td>"
-            f"<td class='py-2.5 px-3'>{a.teacher_name}</td>"
-            f"<td class='py-2.5 px-3'>{a.date}</td>"
-            f"<td class='py-2.5 px-3 font-extrabold text-red-700'>{format_hours(a.hours)} سا</td>"
-            "</tr>"
+    # تجميع الغيابات حسب القسم (تلاميذ + غياب الأستاذ)
+    sections_overview_rows = []
+    for sec in OFFICIAL_SECTIONS:
+        sec_students = [a for a in student_absences if a.section_name == sec]
+        sec_teachers = [r for r in t_rows if r["section_name"] == sec]
+
+        items_html = []
+        for tr in sec_teachers:
+            items_html.append(
+                f"<div class='text-orange-900 bg-orange-50 border border-orange-200 rounded px-2.5 py-1 mb-1 font-bold'>"
+                f"غياب الأستاذ: {tr['teacher_name']} — ساعة الغياب: {format_hours(tr['hours'])} سا ({tr['date']})"
+                f"</div>"
+            )
+        for st in sec_students:
+            items_html.append(
+                f"<div class='text-rose-900 bg-rose-50 border border-rose-200 rounded px-2.5 py-1 mb-1'>"
+                f"التلميذ: <span class='font-bold'>{st.student_name}</span> — {st.date} — ({format_hours(st.hours)} سا)"
+                f"</div>"
+            )
+
+        if items_html:
+            detail_cell = "".join(items_html)
+        else:
+            detail_cell = "<span class='text-slate-500 font-bold bg-slate-100 px-2.5 py-1 rounded'>لا توجد غيابات مسجلة</span>"
+
+        sections_overview_rows.append(
+            f"<tr class='border-b text-xs align-top'>"
+            f"<td class='py-2.5 px-3 font-extrabold text-blue-900 whitespace-nowrap'>{sec}</td>"
+            f"<td class='py-2.5 px-3'>{detail_cell}</td>"
+            f"</tr>"
         )
-        for a in reversed(attendances)
-    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد غيابات مسجلة بعد.</td></tr>"
+
+    sections_rows_html = "".join(sections_overview_rows)
 
     return f"""
     <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
     <body class="bg-slate-100 min-h-screen p-6">
         <div class="max-w-6xl mx-auto space-y-6">
+            {f"<div class='space-y-2'>{flashes_html}</div>" if flashes_html else ""}
+
             <div class="bg-white rounded-2xl shadow-md p-6 border-r-8 border-amber-600 space-y-4">
                 <div class="flex flex-wrap justify-between items-center gap-2">
                     <div>
@@ -1695,15 +1751,15 @@ def mod_counselor_dashboard_view():
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
                         <div class="text-[11px] font-bold text-rose-700">غيابات التلاميذ (حالات / ساعات)</div>
-                        <div class="text-base font-extrabold text-rose-950 mt-1">{stats['student_absence_count']} / {format_hours(stats['student_absence_hours'])} سا</div>
+                        <div class="text-base font-extrabold text-rose-950 mt-1">{student_absence_count} / {format_hours(student_absence_hours)} سا</div>
                     </div>
                     <div class="bg-orange-50 border border-orange-200 rounded-xl p-3.5">
                         <div class="text-[11px] font-bold text-orange-800">غيابات الأساتذة (حالات / ساعات)</div>
-                        <div class="text-base font-extrabold text-orange-950 mt-1">{stats['teacher_absence_count']} / {format_hours(stats['teacher_absence_hours'])} سا</div>
+                        <div class="text-base font-extrabold text-orange-950 mt-1">{teacher_absence_count} / {format_hours(teacher_absence_hours)} سا</div>
                     </div>
                     <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
                         <div class="text-[11px] font-bold text-amber-800">عدد أعضاء الاستشارة</div>
-                        <div class="text-base font-extrabold text-amber-950 mt-1">{stats['counselor_members_count']}</div>
+                        <div class="text-base font-extrabold text-amber-950 mt-1">{len(counselor_members)}</div>
                     </div>
                     <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
                         <div class="text-[11px] font-bold text-blue-700">أساتذة حددوا حجمهم الساعي</div>
@@ -1717,17 +1773,48 @@ def mod_counselor_dashboard_view():
                 </div>
 
                 <div class="border-t pt-3 space-y-2">
-                    <div class="text-xs font-bold text-slate-700">الحجم الساعي الفعلي للأساتذة (يظهر بعد تحديده من الأستاذ):</div>
+                    <div class="text-xs font-bold text-slate-700">الساعات الفعلية للأساتذة:</div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">{declared_teachers_cards}</div>
                 </div>
             </div>
 
+            <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
+                <h2 class="text-md font-bold text-gray-800 border-b pb-2">تسجيل غياب أستاذ وتحديده أمام القسم</h2>
+                <form action="/counselor/record-teacher-absence" method="POST" class="grid grid-cols-1 md:grid-cols-5 gap-3">
+                    <div>
+                        <label class="block text-[11px] font-bold text-gray-600 mb-1">الأستاذ (الاسم واللقب)</label>
+                        <select name="teacher_username" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white font-bold">
+                            <option value="" disabled selected>-- اختر الأستاذ --</option>
+                            {teacher_select_options}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold text-gray-600 mb-1">القسم</label>
+                        <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white font-bold">
+                            <option value="" disabled selected>-- اختر القسم --</option>
+                            {section_select_options}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold text-gray-600 mb-1">ساعة الغياب</label>
+                        <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" required class="w-full px-3 py-2 rounded-lg border text-xs font-bold text-center">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] font-bold text-gray-600 mb-1">التاريخ</label>
+                        <input type="date" name="date" value="{today_date}" required class="w-full px-3 py-2 rounded-lg border text-xs">
+                    </div>
+                    <div class="flex items-end">
+                        <button type="submit" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition">تسجيل غياب الأستاذ</button>
+                    </div>
+                </form>
+            </div>
+
             <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">سجل غيابات التلاميذ الواردة من لوحة الأستاذ تلقائياً</h2>
+                <h2 class="text-md font-bold text-gray-800 mb-4">قائمة الأقسام وغياباتها (تلاميذ وأساتذة)</h2>
                 <div class="overflow-x-auto">
                     <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">التلميذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">الأستاذ</th><th class="py-2.5 px-3">التاريخ</th><th class="py-2.5 px-3">الساعات</th></tr></thead>
-                        <tbody>{att_rows}</tbody>
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3 w-36">القسم</th><th class="py-2.5 px-3">الغيابات المسجلة</th></tr></thead>
+                        <tbody>{sections_rows_html}</tbody>
                     </table>
                 </div>
             </div>
@@ -1736,16 +1823,57 @@ def mod_counselor_dashboard_view():
     """
 
 
-_mod_bind_view("/counselor/dashboard-view", "counselor_dashboard_view", mod_counselor_dashboard_view, methods=["GET"])
+# ==============================================================================
+# لوحة السيد الناظر
+# ==============================================================================
 
-
-# --- 6. لوحة المدير (عرض الحصص المرسلة له فقط + تقارير الحارس العام المرفوعة) ---
+@app.route("/deputy/dashboard-view")
 @login_required
-def mod_director_dashboard_view():
+def deputy_dashboard_view():
+    if session.get("role") != "inspector_deputy":
+        return redirect(url_for("home"))
+    approved_logs = LessonLog.query.filter_by(approval_status="approved").all()
+    total_hrs = sum(float(l.hours or 0) for l in approved_logs)
+    rows = "".join([
+        f"<tr class='border-b text-xs'><td class='py-3 px-4'>{l.teacher_name}</td><td class='py-3 px-4'>{l.section_name}</td><td class='py-3 px-4 font-bold'>{l.lesson_title}</td><td class='py-3 px-4'>{l.content}</td><td class='py-3 px-4 font-bold'>{format_hours(l.hours)} سا</td><td class='py-3 px-4'>{l.date}</td></tr>"
+        for l in approved_logs
+    ]) or "<tr><td colspan='6' class='text-center py-4 text-gray-400'>لا توجد دروس معتمدة بعد.</td></tr>"
+    return f"""
+    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
+    <body class="bg-slate-100 min-h-screen p-6">
+        <div class="max-w-5xl mx-auto space-y-6">
+            <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-indigo-600">
+                <div>
+                    <h1 class="text-xl font-bold text-gray-800">التنسيق البيداغوجي - السيد الناظر</h1>
+                    <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد | إجمالي الساعات المعتمدة: {format_hours(total_hrs)} سا</p>
+                </div>
+                <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
+            </div>
+            <div class="bg-white rounded-2xl shadow-md p-6">
+                <h2 class="text-md font-bold text-gray-800 mb-4">متابعة دفاتر النصوص المعتمدة</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-right">
+                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-3 px-4">الأستاذ</th><th class="py-3 px-4">القسم</th><th class="py-3 px-4">الدرس</th><th class="py-3 px-4">المحتوى</th><th class="py-3 px-4">الساعات</th><th class="py-3 px-4">التاريخ</th></tr></thead>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </body></html>
+    """
+
+
+# ==============================================================================
+# لوحة السيد المدير (عرض الحصص المرسلة له + تقارير الحارس العام المرفوعة)
+# ==============================================================================
+
+@app.route("/director/dashboard-view")
+@login_required
+def director_dashboard_view():
     if session.get("role") not in DIRECTOR_ROLES:
         return redirect(url_for("home"))
 
-    _mod_ensure_report_table()
+    _ensure_extra_tables()
     sent_lessons = LessonLog.query.filter_by(approved_by="مرسل للمدير").all()
     declared_teachers = get_declared_teachers()
     reports = db.session.execute(
@@ -1771,38 +1899,17 @@ def mod_director_dashboard_view():
     latest_counselor_cnt = f"{latest_report[7]}" if latest_report else "0"
 
     declared_teachers_html = "".join([
-        (
-            "<div class='bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs flex justify-between items-center'>"
-            f"<span class='font-bold text-slate-800'>{t.fullname}</span>"
-            f"<span class='bg-blue-100 text-blue-900 font-extrabold px-3 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span>"
-            "</div>"
-        )
+        f"<div class='bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs flex justify-between items-center'><span class='font-bold text-slate-800'>{t.fullname}</span><span class='bg-blue-100 text-blue-900 font-extrabold px-3 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span></div>"
         for t in declared_teachers
     ]) or "<p class='text-xs text-slate-400'>لا توجد حجوم ساعية محددة من طرف الأساتذة بعد.</p>"
 
     sent_lessons_rows = "".join([
-        (
-            "<tr class='border-b text-xs'>"
-            f"<td class='py-2.5 px-3'>{l.teacher_name}</td>"
-            f"<td class='py-2.5 px-3'>{l.section_name}</td>"
-            f"<td class='py-2.5 px-3 font-bold'>{l.lesson_title}</td>"
-            f"<td class='py-2.5 px-3 font-bold'>{format_hours(l.hours)} سا</td>"
-            f"<td class='py-2.5 px-3'>{l.date}</td>"
-            "</tr>"
-        )
+        f"<tr class='border-b text-xs'><td class='py-2.5 px-3'>{l.teacher_name}</td><td class='py-2.5 px-3'>{l.section_name}</td><td class='py-2.5 px-3 font-bold'>{l.lesson_title}</td><td class='py-2.5 px-3 font-bold'>{format_hours(l.hours)} سا</td><td class='py-2.5 px-3'>{l.date}</td></tr>"
         for l in reversed(sent_lessons)
     ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لم يرسل أي أستاذ حصصاً للمدير بعد.</td></tr>"
 
     reports_rows = "".join([
-        (
-            "<tr class='border-b text-xs'>"
-            f"<td class='py-2.5 px-3 font-bold'>{r[1] or '-'}</td>"
-            f"<td class='py-2.5 px-3'>{r[2] or '-'}</td>"
-            f"<td class='py-2.5 px-3'>{r[3]} ({format_hours(r[4])} سا)</td>"
-            f"<td class='py-2.5 px-3'>{r[5]} ({format_hours(r[6])} سا)</td>"
-            f"<td class='py-2.5 px-3 font-bold'>{r[7]}</td>"
-            "</tr>"
-        )
+        f"<tr class='border-b text-xs'><td class='py-2.5 px-3 font-bold'>{r[1] or '-'}</td><td class='py-2.5 px-3'>{r[2] or '-'}</td><td class='py-2.5 px-3'>{r[3]} ({format_hours(r[4])} سا)</td><td class='py-2.5 px-3'>{r[5]} ({format_hours(r[6])} سا)</td><td class='py-2.5 px-3 font-bold'>{r[7]}</td></tr>"
         for r in reports
     ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد تقارير مرفوعة من الحارس العام بعد.</td></tr>"
 
@@ -1839,7 +1946,7 @@ def mod_director_dashboard_view():
                 </div>
 
                 <div class="border-t pt-3 space-y-2">
-                    <div class="text-xs font-bold text-slate-700">الحجم الساعي الفعلي للأساتذة (يظهر فقط بعد أن يحدده الأستاذ):</div>
+                    <div class="text-xs font-bold text-slate-700">الساعات الفعلية للأساتذة:</div>
                     <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">{declared_teachers_html}</div>
                 </div>
             </div>
@@ -1867,12 +1974,6 @@ def mod_director_dashboard_view():
     </body></html>
     """
 
-
-_mod_bind_view("/director/dashboard-view", "director_dashboard_view", mod_director_dashboard_view, methods=["GET"])
-
-# ==============================================================================
-# [نهاية التعديل المنفرد]
-# ==============================================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
