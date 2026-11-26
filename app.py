@@ -16,6 +16,7 @@ from flask import (
     url_for,
     flash,
     session,
+    get_flashed_messages,
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
@@ -70,7 +71,7 @@ class User(db.Model):
     role = db.Column(db.String(50), nullable=False, default="teacher")
     fullname = db.Column(db.String(120), nullable=False)
     sections_json = db.Column(db.Text, nullable=False, default="[]")
-    weekly_hours = db.Column(db.Float, nullable=True)  # الساعات الفعلية الأسبوعية يحددها الأستاذ
+    weekly_hours = db.Column(db.Float, nullable=True)
 
     @property
     def password(self):
@@ -578,7 +579,6 @@ def _add_column_if_missing(conn, table_name, col_name, col_def):
 
 
 def ensure_schema_columns():
-    """ترقية الجداول تلقائياً لإضافة الأعمدة الجديدة دون فقدان البيانات."""
     inspector = inspect(db.engine)
     tables = set(inspector.get_table_names())
 
@@ -618,7 +618,6 @@ def ensure_schema_columns():
 
 
 def _ensure_extra_tables():
-    """إنشاء جداول غياب الأساتذة وتقارير الحارس العام المرفوعة للمدير."""
     is_pg = db.engine.dialect.name == "postgresql"
     pk_col = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
     with db.engine.begin() as conn:
@@ -711,7 +710,6 @@ def format_hours(val):
 
 
 def get_declared_teachers():
-    """يرجع فقط الأساتذة الذين حددوا حجمهم الساعي الفعلي."""
     teachers = User.query.filter_by(role="teacher").all()
     return [t for t in teachers if t.weekly_hours is not None and float(t.weekly_hours) > 0]
 
@@ -728,7 +726,6 @@ def _parse_date_safe(date_str):
 
 
 def _is_in_current_week(date_str):
-    """يتحقق إن كان التاريخ يقع ضمن الأسبوع الحالي (من السبت أو الاثنين حسب التقويم المرجعي)."""
     dt = _parse_date_safe(date_str)
     if not dt:
         return False
@@ -741,7 +738,6 @@ def _is_in_current_week(date_str):
 
 
 def _get_teacher_absences_rows():
-    """إرجاع قائمة غيابات الأساتذة المسجلة."""
     _ensure_extra_tables()
     rows = db.session.execute(
         text(
@@ -764,7 +760,6 @@ def _get_teacher_absences_rows():
 
 
 def _get_teacher_weekly_absence_hours(teacher_uname, teacher_fullname, assigned_sections):
-    """حساب ساعات الغياب في الأسبوع الحالي للأستاذ (من غياباته المسجلة أو غيابات أقسامه في نفس الأسبوع)."""
     t_rows = _get_teacher_absences_rows()
     weekly_teacher_hrs = sum(
         r["hours"]
@@ -814,7 +809,7 @@ LOGIN_TEMPLATE = """
             <p class="text-sm text-blue-600 font-semibold mt-1">منصة تسيير المؤسسة التربوية</p>
         </div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% with messages = get_flashed_messages(with_categories=True) %}
           {% if messages %}
             <div class="space-y-2 mb-4">
               {% for category, message in messages %}
@@ -883,7 +878,7 @@ REGISTER_PAGE_HTML = """
             <p class="text-xs text-blue-600 font-semibold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
         </div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% with messages = get_flashed_messages(with_categories=True) %}
           {% if messages %}
             <div class="space-y-2 mb-4">
               {% for category, message in messages %}
@@ -964,7 +959,7 @@ RECOVER_PAGE_HTML = """
             <p class="text-xs text-blue-600 font-semibold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
         </div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% with messages = get_flashed_messages(with_categories=True) %}
           {% if messages %}
             <div class="space-y-2 mb-4">
               {% for category, message in messages %}
@@ -1355,7 +1350,6 @@ def teacher_dashboard_view():
     sent_to_director_count = sum(1 for l in my_lessons if l.approved_by == "مرسل للمدير")
     total_lesson_hours = sum(float(l.hours or 0) for l in my_lessons)
 
-    # أرشيف الغيابات السنوي للأستاذ بالاسم واللقب
     archive_query = Attendance.query.filter_by(teacher_username=teacher_uname)
     if archive_section_filter:
         archive_query = archive_query.filter_by(section_name=archive_section_filter)
@@ -1363,7 +1357,7 @@ def teacher_dashboard_view():
 
     flashes_html = "".join([
         f"<div class='p-3 rounded-lg text-xs font-bold text-center border {'bg-emerald-50 text-emerald-700 border-emerald-200' if cat == 'success' else 'bg-red-50 text-red-700 border-red-200'}'>{msg}</div>"
-        for cat, msg in get_flashed_messages(with_categories=true)
+        for cat, msg in get_flashed_messages(with_categories=True)
     ])
 
     attendance_rows = "".join([f"""
@@ -1480,7 +1474,7 @@ def teacher_dashboard_view():
                         <form method="GET" action="/teacher/dashboard-view" class="flex gap-2">
                             <input type="hidden" name="archive_section" value="{archive_section_filter}">
                             <select name="section" onchange="this.form.submit()" class="px-3 py-1.5 rounded-lg border text-xs bg-white font-bold text-blue-800">
-                                <option value="" disabled selected>-- اختر القسم --</option>
+                                <option value="" disabled {"selected" if not selected_section else ""}>-- اختر القسم --</option>
                                 {my_sections_options}
                             </select>
                         </form>
@@ -1671,7 +1665,7 @@ def counselor_dashboard_view():
 
     flashes_html = "".join([
         f"<div class='p-3 rounded-lg text-xs font-bold text-center border {'bg-emerald-50 text-emerald-700 border-emerald-200' if cat == 'success' else 'bg-red-50 text-red-700 border-red-200'}'>{msg}</div>"
-        for cat, msg in get_flashed_messages(with_categories=true)
+        for cat, msg in get_flashed_messages(with_categories=True)
     ])
 
     teacher_select_options = "".join([
@@ -1694,7 +1688,6 @@ def counselor_dashboard_view():
         for t in declared_teachers
     ]) or "<p class='text-xs text-slate-400'>لم يحدد أي أستاذ حجمه الساعي بعد.</p>"
 
-    # تجميع الغيابات حسب القسم (تلاميذ + غياب الأستاذ)
     sections_overview_rows = []
     for sec in OFFICIAL_SECTIONS:
         sec_students = [a for a in student_absences if a.section_name == sec]
