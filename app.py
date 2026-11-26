@@ -1,90 +1,89 @@
-# ==============================================================================
-# منصة تسيير المؤسسة - ثانوية الشهيد قوديد أحمد (سيدي الشحمي)
-# النسخة المطوّرة: أرشيف سنوي للغيابات + عرض الأقسام للحارس العام + غياب الأستاذ + مؤشرات الأستاذ الأسبوعية
-# ==============================================================================
-
-import json
 import os
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from functools import wraps
-
 from flask import (
     Flask,
-    render_template_string,
     request,
     redirect,
     url_for,
-    flash,
     session,
-    get_flashed_messages,
+    render_template_string,
+    flash,
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = os.environ.get(
-    "SECRET_KEY", "manassat_tassiyir_muassasa_secret_key_2026"
-)
+app.secret_key = os.environ.get("SECRET_KEY", "qoudid-ahmed-management-secret-key-2026")
 
-basedir = os.path.abspath(os.path.dirname(__file__))
-database_url = os.environ.get("DATABASE_URL", "").strip()
+# ==============================================================================
+# إعداد قاعدة البيانات (يدعم PostgreSQL الدائم أو SQLite محلياً)
+# ==============================================================================
 
-if database_url:
-    if database_url.startswith("postgres://"):
-        database_url = database_url.replace("postgres://", "postgresql://", 1)
-    app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-    DB_MODE_LABEL = "متصل بقاعدة بيانات دائمة (PostgreSQL)"
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+if DATABASE_URL:
+    app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
     IS_PERSISTENT_DB = True
+    DB_MODE_LABEL = "قاعدة بيانات دائمة مفعّلة (PostgreSQL)"
 else:
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(
-        basedir, "philo_school_manager.db"
-    )
-    DB_MODE_LABEL = "تنبيه: يعمل حالياً على قاعدة محلية مؤقتة (SQLite) — أضف DATABASE_URL في Render"
+    sqlite_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "school_management.db")
+    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{sqlite_path}"
     IS_PERSISTENT_DB = False
+    DB_MODE_LABEL = "وضع قاعدة البيانات المحلية (SQLite)"
 
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
 db = SQLAlchemy(app)
 
-ROLES = ["teacher", "counselor", "inspector_deputy", "director"]
-COUNSELOR_ROLES = ("counselor", "advisor", "guidance_counselor")
-DIRECTOR_ROLES = ("director", "principal")
-TEACHER_ROLES = ("teacher",)
+ROLES = {
+    "director": "المدير",
+    "inspector_deputy": "الناظر",
+    "counselor": "مستشار التربية",
+    "teacher": "أستاذ",
+}
 
 OFFICIAL_SECTIONS = [
-    "1أ1", "1أ2", "1أ3", "1ع1", "1ع2", "1ع3", "1ع4", "1ع5", "1ع6",
-    "2أف1", "2أف2", "2لغ", "2ع ت1", "2ع ت2",
-    "2تق", "2ريا", "2تر (هـ ط)", "2تر (هـ ك)", "2تر (هـ م)",
-    "3أف1", "3أف2", "3لغ (إسبانية)", "3لغ (ألمانية)", "3ع ت1", "3ع ت2",
-    "3تق", "3ريا", "3تر (هـ ك)", "3تر (هـ م)"
+    "1ج م آ 1", "1ج م آ 2", "1ج م آ 3",
+    "1ج م ع 1", "1ج م ع 2", "1ج م ع 3", "1ج م ع 4", "1ج م ع 5",
+    "2آف1", "2آف2",
+    "2لغ1", "2لغ2",
+    "2ع ت1", "2ع ت2",
+    "2تق", "2ريا",
+    "2تر (هـ ط)", "2تر (هـ ك)", "2تر (هـ م)",
+    "3أف1", "3أف2",
+    "3لغ (إسبانية)", "3لغ (ألمانية)",
+    "3ع ت1", "3ع ت2",
+    "3تق", "3ريا",
+    "3تر (هـ ك)", "3تر (هـ م)",
 ]
 
-# ==============================================================================
-# نماذج قواعد البيانات (Models)
-# ==============================================================================
 
 class User(db.Model):
+    __tablename__ = "user"
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(50), nullable=False, default="teacher")
+    role = db.Column(db.String(30), nullable=False)
     fullname = db.Column(db.String(120), nullable=False)
-    sections_json = db.Column(db.Text, nullable=False, default="[]")
+    sections_json = db.Column(db.Text, default="[]")
     weekly_hours = db.Column(db.Float, nullable=True)
 
     @property
     def password(self):
-        raise AttributeError("password is write-only")
+        return self.password_hash
 
     @password.setter
     def password(self, raw_password):
         self.password_hash = generate_password_hash(raw_password)
 
     def verify_password(self, raw_password):
-        if not self.password_hash:
+        if not raw_password or not self.password_hash:
             return False
-        if self.password_hash.startswith(("pbkdf2:", "scrypt:")):
+        if self.password_hash.startswith(("scrypt:", "pbkdf2:")):
             return check_password_hash(self.password_hash, raw_password)
         return self.password_hash == raw_password
 
@@ -93,483 +92,402 @@ class User(db.Model):
         try:
             data = json.loads(self.sections_json or "[]")
             return data if isinstance(data, list) else []
-        except ValueError:
+        except (ValueError, TypeError):
             return []
 
     @sections.setter
     def sections(self, value):
-        cleaned = [s for s in value if s in OFFICIAL_SECTIONS]
-        self.sections_json = json.dumps(cleaned, ensure_ascii=False)
-
-
-class Student(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    fullname = db.Column(db.String(120), nullable=False)
-    section_name = db.Column(db.String(100), nullable=False)
-    teacher_username = db.Column(db.String(80), nullable=True)
+        self.sections_json = json.dumps(value or [], ensure_ascii=False)
 
 
 class TeacherSection(db.Model):
+    __tablename__ = "teacher_section"
     id = db.Column(db.Integer, primary_key=True)
     teacher_username = db.Column(db.String(80), nullable=False)
-    section_name = db.Column(db.String(100), nullable=False)
+    section_name = db.Column(db.String(80), nullable=False)
+
+
+class Student(db.Model):
+    __tablename__ = "student"
+    id = db.Column(db.Integer, primary_key=True)
+    fullname = db.Column(db.String(150), nullable=False)
+    section_name = db.Column(db.String(80), nullable=False)
+    teacher_username = db.Column(db.String(80), default="system")
 
 
 class Attendance(db.Model):
+    __tablename__ = "attendance"
     id = db.Column(db.Integer, primary_key=True)
-    student_name = db.Column(db.String(120), nullable=False)
-    section_name = db.Column(db.String(100), nullable=False)
+    student_name = db.Column(db.String(150), nullable=False)
+    section_name = db.Column(db.String(80), nullable=False)
     teacher_username = db.Column(db.String(80), nullable=True)
     teacher_name = db.Column(db.String(120), nullable=False)
-    date = db.Column(db.String(50), nullable=False)
-    status = db.Column(db.String(20), default="غائب")
-    hours = db.Column(db.Float, nullable=False, default=1.0)
-    approval_status = db.Column(db.String(20), nullable=False, default="approved")
+    date = db.Column(db.String(30), nullable=False)
+    status = db.Column(db.String(30), nullable=False)
+    hours = db.Column(db.Float, default=1.0)
+    approval_status = db.Column(db.String(20), default="approved")
     approved_by = db.Column(db.String(120), nullable=True)
 
 
 class LessonLog(db.Model):
+    __tablename__ = "lesson_log"
     id = db.Column(db.Integer, primary_key=True)
     teacher_username = db.Column(db.String(80), nullable=True)
     teacher_name = db.Column(db.String(120), nullable=False)
-    section_name = db.Column(db.String(100), nullable=False)
+    section_name = db.Column(db.String(80), nullable=False)
     lesson_title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    date = db.Column(db.String(50), nullable=False)
-    hours = db.Column(db.Float, nullable=False, default=1.0)
-    approval_status = db.Column(db.String(20), nullable=False, default="approved")
+    date = db.Column(db.String(30), nullable=False)
+    hours = db.Column(db.Float, default=1.0)
+    approval_status = db.Column(db.String(20), default="pending")
     approved_by = db.Column(db.String(120), nullable=True)
 
 
 DEFAULT_STUDENTS = [
-    {"fullname": "المراربي أمينة", "section_name": "1أ1"}, {"fullname": "بدة ملاك", "section_name": "1أ1"},
-    {"fullname": "بران محمد", "section_name": "1أ1"}, {"fullname": "بلعباس بن قرعة كوثر", "section_name": "1أ1"},
-    {"fullname": "بلميلود أدم", "section_name": "1أ1"}, {"fullname": "بلميلود هاجر", "section_name": "1أ1"},
-    {"fullname": "بلهادف بدرة سلسبيل", "section_name": "1أ1"}, {"fullname": "بلولو سندس", "section_name": "1أ1"},
-    {"fullname": "بن حمادي إسلام", "section_name": "1أ1"}, {"fullname": "بن حمدود سندس", "section_name": "1أ1"},
-    {"fullname": "بن حصالي ألاء", "section_name": "1أ1"}, {"fullname": "بن دوخة عبد الرحمان", "section_name": "1أ1"},
-    {"fullname": "بن سعيد مروى", "section_name": "1أ1"}, {"fullname": "بن عبد المومن آية", "section_name": "1أ1"},
-    {"fullname": "بن علال هبة خيرة", "section_name": "1أ1"}, {"fullname": "بن ناصر رتاج", "section_name": "1أ1"},
-    {"fullname": "بنوار مريم", "section_name": "1أ1"}, {"fullname": "بوخرص محمد صهيب", "section_name": "1أ1"},
-    {"fullname": "بوري توفيق", "section_name": "1أ1"}, {"fullname": "بورياح ايوب", "section_name": "1أ1"},
-    {"fullname": "بوزيان محمد الأمين", "section_name": "1أ1"}, {"fullname": "حمودي فاطمة", "section_name": "1أ1"},
-    {"fullname": "داودي فاطمة الزهراء", "section_name": "1أ1"}, {"fullname": "دحماني أمين", "section_name": "1أ1"},
-    {"fullname": "دراديز اسلام الدين", "section_name": "1أ1"}, {"fullname": "رابح نوال", "section_name": "1أ1"},
-    {"fullname": "رفاسي ياسمين", "section_name": "1أ1"}, {"fullname": "سريك رزان عائشة", "section_name": "1أ1"},
-    {"fullname": "سعدو اسراء", "section_name": "1أ1"}, {"fullname": "شتوكي آية", "section_name": "1أ1"},
-    {"fullname": "شفار حبيب", "section_name": "1أ1"}, {"fullname": "شفار بشرى", "section_name": "1أ1"},
-    {"fullname": "عايد وصال نور الهدى", "section_name": "1أ1"}, {"fullname": "عبيد نور الدين", "section_name": "1أ1"},
-    {"fullname": "كاتب الهاشمي هاجر", "section_name": "1أ1"}, {"fullname": "كرتالی محمد ايهاب", "section_name": "1أ1"},
-    {"fullname": "كيري أية اناس", "section_name": "1أ1"}, {"fullname": "محبوب فراح", "section_name": "1أ1"},
-    {"fullname": "مرين رؤية", "section_name": "1أ1"}, {"fullname": "مرين عمر", "section_name": "1أ1"},
-    {"fullname": "مكاب ياسين محمد سالم", "section_name": "1أ1"}, {"fullname": "مناع حمزة", "section_name": "1أ1"},
-    {"fullname": "مهدي أسماء", "section_name": "1أ1"}, {"fullname": "ناصر شرقي حسن حسين", "section_name": "1أ1"},
-    {"fullname": "بخدة إسراء", "section_name": "1أ2"}, {"fullname": "برحمون سناء", "section_name": "1أ2"},
-    {"fullname": "بلغربي إسراء", "section_name": "1أ2"}, {"fullname": "بن دادة ملاك", "section_name": "1أ2"},
-    {"fullname": "بن عطية فاطمة", "section_name": "1أ2"}, {"fullname": "بن علال عبد الله اسلام", "section_name": "1أ2"},
-    {"fullname": "بن عودة شحط شهيناز", "section_name": "1أ2"}, {"fullname": "بنافلة فاروق", "section_name": "1أ2"},
-    {"fullname": "بوخلوة محمد عز الدين", "section_name": "1أ2"}, {"fullname": "بوزار أمينة", "section_name": "1أ2"},
-    {"fullname": "بوزيان آية ملاك", "section_name": "1أ2"}, {"fullname": "بوعلام مليكة", "section_name": "1أ2"},
-    {"fullname": "بوقفة عبد الكريم", "section_name": "1أ2"}, {"fullname": "بوليلة عثمان", "section_name": "1أ2"},
-    {"fullname": "ثابت حفصة", "section_name": "1أ2"}, {"fullname": "ثابت سندس", "section_name": "1أ2"},
-    {"fullname": "جيد هديل", "section_name": "1أ2"}, {"fullname": "حداد زهرة", "section_name": "1أ2"},
-    {"fullname": "حنيفي أمال", "section_name": "1أ2"}, {"fullname": "روام سريك عائشة", "section_name": "1أ2"},
-    {"fullname": "روماري محمد عادل", "section_name": "1أ2"}, {"fullname": "زوج ملاك", "section_name": "1أ2"},
-    {"fullname": "زوانب هواري", "section_name": "1أ2"}, {"fullname": "سجلوماسى هند", "section_name": "1أ2"},
-    {"fullname": "شايب الدور آية الرحمان", "section_name": "1أ2"}, {"fullname": "شريفي فريال", "section_name": "1أ2"},
-    {"fullname": "صابر معزوز بتينة", "section_name": "1أ2"}, {"fullname": "عمارة فراح", "section_name": "1أ2"},
-    {"fullname": "عواد إيمان", "section_name": "1أ2"}, {"fullname": "عياد إكرام", "section_name": "1أ2"},
-    {"fullname": "فايدة ريهام أميمة", "section_name": "1أ2"}, {"fullname": "فرحاوي فراح غزلان", "section_name": "1أ2"},
-    {"fullname": "قبايلى محمد مروان", "section_name": "1أ2"}, {"fullname": "قطاف رحيل", "section_name": "1أ2"},
-    {"fullname": "قورين اسيا", "section_name": "1أ2"}, {"fullname": "كرتالي لجين", "section_name": "1أ2"},
-    {"fullname": "مرين عبد الباسط عبد الصمد", "section_name": "1أ2"}, {"fullname": "مرين يمينة", "section_name": "1أ2"},
-    {"fullname": "موزاع دلين", "section_name": "1أ2"}, {"fullname": "ناصر الشرقي مصطفى", "section_name": "1أ2"},
-    {"fullname": "ناصر شرقي ميلود", "section_name": "1أ2"}, {"fullname": "نباتي شرقي شيماء", "section_name": "1أ2"},
-    {"fullname": "وانس مشكور سرين", "section_name": "1أ2"},
-    {"fullname": "بداوي أسيا", "section_name": "1أ3"}, {"fullname": "بركليت رحيل", "section_name": "1أ3"},
-    {"fullname": "بلبية أمال", "section_name": "1أ3"}, {"fullname": "بلعابد بشرى", "section_name": "1أ3"},
-    {"fullname": "بلعربي كوثر", "section_name": "1أ3"}, {"fullname": "بلكحلة أحمد", "section_name": "1أ3"},
-    {"fullname": "بلميلود دعاء", "section_name": "1أ3"}, {"fullname": "بن عطية فدوى نضال", "section_name": "1أ3"},
-    {"fullname": "بنوار ياسين عبد الرحمان", "section_name": "1أ3"}, {"fullname": "بوخلفة احلام", "section_name": "1أ3"},
-    {"fullname": "بورشاش عبد الحكيم", "section_name": "1أ3"}, {"fullname": "بوطيبة معمر عبد الغنى", "section_name": "1أ3"},
-    {"fullname": "تقية محمد الأمين", "section_name": "1أ3"}, {"fullname": "تويلي صفاء", "section_name": "1أ3"},
-    {"fullname": "جبلى نريمان", "section_name": "1أ3"}, {"fullname": "جديد خيرة", "section_name": "1أ3"},
-    {"fullname": "حمادي دنيا", "section_name": "1أ3"}, {"fullname": "رزيق يوسف", "section_name": "1أ3"},
-    {"fullname": "رفاس هواري إسحاق", "section_name": "1أ3"}, {"fullname": "سافر محمد", "section_name": "1أ3"},
-    {"fullname": "شلابي محمد ياسر", "section_name": "1أ3"}, {"fullname": "صالح هلال محمد أمين", "section_name": "1أ3"},
-    {"fullname": "طويل رقية ملاك", "section_name": "1أ3"}, {"fullname": "عبيد شيراز نسرين", "section_name": "1أ3"},
-    {"fullname": "عتو نور الدين عبد الصمد", "section_name": "1أ3"}, {"fullname": "عزة فريال", "section_name": "1أ3"},
-    {"fullname": "علاوي فريال عائشة", "section_name": "1أ3"}, {"fullname": "عمارة دعاء", "section_name": "1أ3"},
-    {"fullname": "عيسى جميلة", "section_name": "1أ3"}, {"fullname": "غراس بهجة ايناس", "section_name": "1أ3"},
-    {"fullname": "قرميط رتاج سهيلة", "section_name": "1أ3"}, {"fullname": "قنيش فاطمة", "section_name": "1أ3"},
-    {"fullname": "قنيش أيوب", "section_name": "1أ3"}, {"fullname": "كروش أسيا", "section_name": "1أ3"},
-    {"fullname": "كيري محمد انس", "section_name": "1أ3"}, {"fullname": "كيلالي ملحة", "section_name": "1أ3"},
-    {"fullname": "مبارك إخلاص", "section_name": "1أ3"}, {"fullname": "مختاري اميمة", "section_name": "1أ3"},
-    {"fullname": "مزيود انس", "section_name": "1أ3"}, {"fullname": "معيطى رتاج", "section_name": "1أ3"},
-    {"fullname": "مملوك ربيعة", "section_name": "1أ3"}, {"fullname": "مواز دعاء", "section_name": "1أ3"},
-    {"fullname": "نباتى شرقى شيراز", "section_name": "1أ3"},
-    {"fullname": "ابراهيم مفلاح اسلام", "section_name": "1ع1"}, {"fullname": "اليوبي هبة الرحمان", "section_name": "1ع1"},
-    {"fullname": "بحوصي محمد العدنان", "section_name": "1ع1"}, {"fullname": "برفاس وصال", "section_name": "1ع1"},
-    {"fullname": "بلحبيب بشري", "section_name": "1ع1"}, {"fullname": "بلعباس مصطفى عبد الرحمان", "section_name": "1ع1"},
-    {"fullname": "بلعباس اميرة", "section_name": "1ع1"}, {"fullname": "بلقاسم رفيدة", "section_name": "1ع1"},
-    {"fullname": "بن زيادي عماد الدين", "section_name": "1ع1"}, {"fullname": "بن عائشة احمد حسام", "section_name": "1ع1"},
-    {"fullname": "بن قانة نورهان", "section_name": "1ع1"}, {"fullname": "بنوار اسامة", "section_name": "1ع1"},
-    {"fullname": "بوخلوة عيسى", "section_name": "1ع1"}, {"fullname": "بورداش عبد الرحمان", "section_name": "1ع1"},
-    {"fullname": "بوزرادة جميلة", "section_name": "1ع1"}, {"fullname": "بوسيف شيخ", "section_name": "1ع1"},
-    {"fullname": "بولحليب عبد الحق", "section_name": "1ع1"}, {"fullname": "حمزة شهد انصاف", "section_name": "1ع1"},
-    {"fullname": "خنو ملاك", "section_name": "1ع1"}, {"fullname": "خيشان ابراهيم", "section_name": "1ع1"},
-    {"fullname": "رفاس نور الهدى خيرة", "section_name": "1ع1"}, {"fullname": "رقيق يسعد بشرى", "section_name": "1ع1"},
-    {"fullname": "زياني سولاف", "section_name": "1ع1"}, {"fullname": "شارف إسماعيل", "section_name": "1ع1"},
-    {"fullname": "شحمي رتاج", "section_name": "1ع1"}, {"fullname": "غمري أماني", "section_name": "1ع1"},
-    {"fullname": "قيروان دعاء", "section_name": "1ع1"}, {"fullname": "كروم محمد علال", "section_name": "1ع1"},
-    {"fullname": "مصالح انس", "section_name": "1ع1"}, {"fullname": "مغربي نور الهدى", "section_name": "1ع1"},
-    {"fullname": "نباتى شرقى ملاك", "section_name": "1ع1"}, {"fullname": "هبري إسمهان رميسة", "section_name": "1ع1"},
-    {"fullname": "اوجيت ملاك", "section_name": "1ع2"}, {"fullname": "أوراغى عبد الجليل", "section_name": "1ع2"},
-    {"fullname": "بلهاشمي كوثر", "section_name": "1ع2"}, {"fullname": "بن دحو آية", "section_name": "1ع2"},
-    {"fullname": "بن عبد الله عبد المالك خالد", "section_name": "1ع2"}, {"fullname": "بن عيشوش ياسين", "section_name": "1ع2"},
-    {"fullname": "بن يوسف قادة", "section_name": "1ع2"}, {"fullname": "بودومي الحسن", "section_name": "1ع2"},
-    {"fullname": "بودية سارة", "section_name": "1ع2"}, {"fullname": "بوسيف عبد الرحمن سعيد", "section_name": "1ع2"},
-    {"fullname": "خنو رجاء", "section_name": "1ع2"}, {"fullname": "رفاسي مريم", "section_name": "1ع2"},
-    {"fullname": "روام سريك يوسف عبد المالك", "section_name": "1ع2"}, {"fullname": "روام سريك أميمة", "section_name": "1ع2"},
-    {"fullname": "زوبة الهواري", "section_name": "1ع2"}, {"fullname": "زوبير علي", "section_name": "1ع2"},
-    {"fullname": "سعادي عمر الفاروق", "section_name": "1ع2"}, {"fullname": "سمون دعاء", "section_name": "1ع2"},
-    {"fullname": "شاقور هنادي", "section_name": "1ع2"}, {"fullname": "طاهري نور الدين", "section_name": "1ع2"},
-    {"fullname": "عبيد ريان", "section_name": "1ع2"}, {"fullname": "فرطاس سعاد", "section_name": "1ع2"},
-    {"fullname": "فرعون ريان رياض", "section_name": "1ع2"}, {"fullname": "فریوی حنان عائشة", "section_name": "1ع2"},
-    {"fullname": "قادري عماد", "section_name": "1ع2"}, {"fullname": "كرتالي هبة جنان", "section_name": "1ع2"},
-    {"fullname": "لكحل خيرالدين", "section_name": "1ع2"}, {"fullname": "مرحوم ياسين", "section_name": "1ع2"},
-    {"fullname": "مصابيح ادم علی", "section_name": "1ع2"}, {"fullname": "معطى الله شمس الضحى", "section_name": "1ع2"},
-    {"fullname": "نصر الدين منال", "section_name": "1ع2"}, {"fullname": "هادف حفصة", "section_name": "1ع2"},
-    {"fullname": "يرو رانيا", "section_name": "1ع2"},
-    {"fullname": "الشرقى ذكرى فاطمة", "section_name": "1ع3"}, {"fullname": "بعلة ألاء سندس", "section_name": "1ع3"},
-    {"fullname": "بقدور عبد الكافي مروان", "section_name": "1ع3"}, {"fullname": "بلعزيز عبد الرحمان", "section_name": "1ع3"},
-    {"fullname": "بلميلود أمال فاطمة", "section_name": "1ع3"}, {"fullname": "بلهاشمى رضوان", "section_name": "1ع3"},
-    {"fullname": "بن رابح محمد", "section_name": "1ع3"}, {"fullname": "بن زايد هديل", "section_name": "1ع3"},
-    {"fullname": "بن عودة شحط يسرى", "section_name": "1ع3"}, {"fullname": "بن مسعود أكرم", "section_name": "1ع3"},
-    {"fullname": "بنوار بشرى", "section_name": "1ع3"}, {"fullname": "بوخرص أسماء", "section_name": "1ع3"},
-    {"fullname": "بوعرارة هديل", "section_name": "1ع3"}, {"fullname": "بوعقل مريم رميسة", "section_name": "1ع3"},
-    {"fullname": "توبة أمينة", "section_name": "1ع3"}, {"fullname": "جديد محمد أمين", "section_name": "1ع3"},
-    {"fullname": "جلواط احمد ياسين", "section_name": "1ع3"}, {"fullname": "حساني عبد الرحمان", "section_name": "1ع3"},
-    {"fullname": "ربوحى بن بربار محمد الامين", "section_name": "1ع3"}, {"fullname": "رصانی جميلة", "section_name": "1ع3"},
-    {"fullname": "رقيق يسعد دينا أسيل", "section_name": "1ع3"}, {"fullname": "زياني مروان", "section_name": "1ع3"},
-    {"fullname": "سرحان ملاك رهف", "section_name": "1ع3"}, {"fullname": "صرصار أية", "section_name": "1ع3"},
-    {"fullname": "عراب سعيد مليسا", "section_name": "1ع3"}, {"fullname": "عروسی رحيل", "section_name": "1ع3"},
-    {"fullname": "عمارة عمارة فارس", "section_name": "1ع3"}, {"fullname": "عمارة محمد أمين", "section_name": "1ع3"},
-    {"fullname": "لقام عائشة", "section_name": "1ع3"}, {"fullname": "لوشنی خديجة", "section_name": "1ع3"},
-    {"fullname": "مشري بوبكر", "section_name": "1ع3"}, {"fullname": "مصابيح فاطمة الزهراء", "section_name": "1ع3"},
-    {"fullname": "مغربي عائشة", "section_name": "1ع3"}, {"fullname": "موفق ملاك", "section_name": "1ع3"},
-    {"fullname": "ناجي كوثر اسراء", "section_name": "1ع3"}, {"fullname": "نباتى شرقى حاجة فاطمة", "section_name": "1ع3"},
-    {"fullname": "احمد بلاحة احمد", "section_name": "1ع4"}, {"fullname": "اوشعبان ملاك", "section_name": "1ع4"},
-    {"fullname": "برداية صافية", "section_name": "1ع4"}, {"fullname": "بشير هناء", "section_name": "1ع4"},
-    {"fullname": "بكييري عبد القادر", "section_name": "1ع4"}, {"fullname": "بلعباس أيوب", "section_name": "1ع4"},
-    {"fullname": "بلعتروس ملاك", "section_name": "1ع4"}, {"fullname": "بلعقون عمر", "section_name": "1ع4"},
-    {"fullname": "بلعيدي خديجة", "section_name": "1ع4"}, {"fullname": "بلميلود زينب", "section_name": "1ع4"},
-    {"fullname": "بن صاولة محمد طه ياسين", "section_name": "1ع4"}, {"fullname": "بوخلوة يحي", "section_name": "1ع4"},
-    {"fullname": "بونعجة مريم", "section_name": "1ع4"}, {"fullname": "حري ألاء شهد", "section_name": "1ع4"},
-    {"fullname": "حمانی مروان", "section_name": "1ع4"}, {"fullname": "حميداش نشوى نورة", "section_name": "1ع4"},
-    {"fullname": "حنيفي مروان محمد امين", "section_name": "1ع4"}, {"fullname": "دويلة ابراهيم خليل عمر", "section_name": "1ع4"},
-    {"fullname": "سبع عبد الحق لزرق", "section_name": "1ع4"}, {"fullname": "سحنون مريم الاء", "section_name": "1ع4"},
-    {"fullname": "سنينة زكرياء", "section_name": "1ع4"}, {"fullname": "سيد احمد سولاف", "section_name": "1ع4"},
-    {"fullname": "شريف محمد عبد الجليل", "section_name": "1ع4"}, {"fullname": "شلابي آية", "section_name": "1ع4"},
-    {"fullname": "صابر أحلام", "section_name": "1ع4"}, {"fullname": "عاشور آية", "section_name": "1ع4"},
-    {"fullname": "عالم جبار صفية", "section_name": "1ع4"}, {"fullname": "عشوري دعاء شيماء", "section_name": "1ع4"},
-    {"fullname": "عماري جلال الدين", "section_name": "1ع4"}, {"fullname": "غفاري أنس عبد الرحمان", "section_name": "1ع4"},
-    {"fullname": "فلاح ياسر", "section_name": "1ع4"}, {"fullname": "فلاح أيمن", "section_name": "1ع4"},
-    {"fullname": "فيدوح سارة", "section_name": "1ع4"}, {"fullname": "قادة بن عثمان هبة الرحمان", "section_name": "1ع4"},
-    {"fullname": "لژغم محمد أمين", "section_name": "1ع4"}, {"fullname": "ميمون عامر", "section_name": "1ع4"},
-    {"fullname": "يحي صفوان", "section_name": "1ع4"},
-    {"fullname": "بلحبيب نسرين", "section_name": "1ع5"}, {"fullname": "بلخير إلياس", "section_name": "1ع5"},
-    {"fullname": "بلعباس فاطمة الزهراء", "section_name": "1ع5"}, {"fullname": "بلقاضى عبد النور", "section_name": "1ع5"},
-    {"fullname": "بلهوان محمد عبد الغانی", "section_name": "1ع5"}, {"fullname": "بن طالب شيماء", "section_name": "1ع5"},
-    {"fullname": "بن عالية عربية ريان", "section_name": "1ع5"}, {"fullname": "بن عثمان سيف الدين", "section_name": "1ع5"},
-    {"fullname": "بن كواشى آدم", "section_name": "1ع5"}, {"fullname": "بن يعقوب بدرة", "section_name": "1ع5"},
-    {"fullname": "بوعلام عثمان", "section_name": "1ع5"}, {"fullname": "جپور خلود", "section_name": "1ع5"},
-    {"fullname": "جلواط أنفال رحيل", "section_name": "1ع5"}, {"fullname": "رجوح شمس الدين ريان", "section_name": "1ع5"},
-    {"fullname": "رجوح سلينا", "section_name": "1ع5"}, {"fullname": "رَقيبة ياسمين", "section_name": "1ع5"},
-    {"fullname": "روان سريك هواري", "section_name": "1ع5"}, {"fullname": "ريزوقة الياس", "section_name": "1ع5"},
-    {"fullname": "زقاق اللاء", "section_name": "1ع5"}, {"fullname": "سى سهلى عبد الرحمان", "section_name": "1ع5"},
-    {"fullname": "شحمی مفيد بدر الدين", "section_name": "1ع5"}, {"fullname": "شيخ غالم إبتسام", "section_name": "1ع5"},
-    {"fullname": "صالحي تقوى الإيمان", "section_name": "1ع5"}, {"fullname": "صحراوي مروى", "section_name": "1ع5"},
-    {"fullname": "طاوي دنيا", "section_name": "1ع5"}, {"fullname": "عالم جبار محمد أيوب", "section_name": "1ع5"},
-    {"fullname": "عبدلى عبد الإله", "section_name": "1ع5"}, {"fullname": "عز الدين مختار الناصر", "section_name": "1ع5"},
-    {"fullname": "فايدة ياسين", "section_name": "1ع5"}, {"fullname": "قريش رضا عبد الإله", "section_name": "1ع5"},
-    {"fullname": "قنيش مختار", "section_name": "1ع5"}, {"fullname": "مدانی فواتيح عتيقة", "section_name": "1ع5"},
-    {"fullname": "مغربی محمد صديق", "section_name": "1ع5"}, {"fullname": "منصور دعاء", "section_name": "1ع5"},
-    {"fullname": "مهنى محمد عبد الرحمان", "section_name": "1ع5"}, {"fullname": "نباتى شرقي عبد الوهاب", "section_name": "1ع5"},
-    {"fullname": "ابراهيم فواتيح على نصر الله", "section_name": "1ع6"}, {"fullname": "الغريسي مليكة", "section_name": "1ع6"},
-    {"fullname": "أوجالی فارس", "section_name": "1ع6"}, {"fullname": "أوسيف أشرف محمد الأمين", "section_name": "1ع6"},
-    {"fullname": "بدة رانية", "section_name": "1ع6"}, {"fullname": "بشير نور الهدى", "section_name": "1ع6"},
-    {"fullname": "بشيري محمد ياسين", "section_name": "1ع6"}, {"fullname": "بلعربي عبد اللطيف", "section_name": "1ع6"},
-    {"fullname": "بلميلود سيف الاسلام", "section_name": "1ع6"}, {"fullname": "بن خلف الله أنس", "section_name": "1ع6"},
-    {"fullname": "بن دوخة بشرى", "section_name": "1ع6"}, {"fullname": "بن رابح رحيل", "section_name": "1ع6"},
-    {"fullname": "بن صباح ندى امال", "section_name": "1ع6"}, {"fullname": "بن عبد الرحمان اسراء", "section_name": "1ع6"},
-    {"fullname": "بن ميرة ملاك", "section_name": "1ع6"}, {"fullname": "بوسلهام نور هند رشيدة", "section_name": "1ع6"},
-    {"fullname": "بوعبدالله تامر", "section_name": "1ع6"}, {"fullname": "بوكراس عبد الرحمان", "section_name": "1ع6"},
-    {"fullname": "جلواط محمد", "section_name": "1ع6"}, {"fullname": "حداد ياسر", "section_name": "1ع6"},
-    {"fullname": "رقيق يسعد سارة", "section_name": "1ع6"}, {"fullname": "سايح دعاء", "section_name": "1ع6"},
-    {"fullname": "سحنون رغدة", "section_name": "1ع6"}, {"fullname": "شافع خودة", "section_name": "1ع6"},
-    {"fullname": "صغير عبد الإله سفيان", "section_name": "1ع6"}, {"fullname": "عبادية يوسف", "section_name": "1ع6"},
-    {"fullname": "عرابة ملك نور", "section_name": "1ع6"}, {"fullname": "عليان رميساء", "section_name": "1ع6"},
-    {"fullname": "قبايلي زهير", "section_name": "1ع6"}, {"fullname": "قدار عبد القادر", "section_name": "1ع6"},
-    {"fullname": "مبارك اسحاق", "section_name": "1ع6"}, {"fullname": "مطرانی لليا", "section_name": "1ع6"},
-    {"fullname": "مقدم جلال", "section_name": "1ع6"}, {"fullname": "مكى اكرام فاطمة", "section_name": "1ع6"},
-    {"fullname": "موساوي وجدان", "section_name": "1ع6"}, {"fullname": "ميموني ألاء", "section_name": "1ع6"},
-    {"fullname": "نباتى شرقى زهرة حليمة", "section_name": "1ع6"}, {"fullname": "يخو عبد القادر سيف الدين", "section_name": "1ع6"},
-    {"fullname": "بخدة محمد ريان", "section_name": "2أف1"}, {"fullname": "بريشي عبد الاله", "section_name": "2أف1"},
-    {"fullname": "بلهوان رميساء", "section_name": "2أف1"}, {"fullname": "بلولو ميلود", "section_name": "2أف1"},
-    {"fullname": "بن زايد عبدالجليل", "section_name": "2أف1"}, {"fullname": "بن شراير أميمة", "section_name": "2أف1"},
-    {"fullname": "بن قانة مريم", "section_name": "2أف1"}, {"fullname": "بن ميرة ادم", "section_name": "2أف1"},
-    {"fullname": "بودالي مروى", "section_name": "2أف1"}, {"fullname": "بودية محمد رضوان", "section_name": "2أف1"},
-    {"fullname": "بورحلة ميمونة دعاء", "section_name": "2أف1"}, {"fullname": "بوسيف محمد", "section_name": "2أف1"},
-    {"fullname": "بوسيف هناء مريم", "section_name": "2أف1"}, {"fullname": "جرى مروى", "section_name": "2أف1"},
-    {"fullname": "رحماني عبد الله هواري", "section_name": "2أف1"}, {"fullname": "رزقى امينة", "section_name": "2أف1"},
-    {"fullname": "رصانی محمد ندير", "section_name": "2أف1"}, {"fullname": "رفاس هاجر", "section_name": "2أف1"},
-    {"fullname": "روام سريك إيمان إسراء", "section_name": "2أف1"}, {"fullname": "سلهامي مصطفى", "section_name": "2أف1"},
-    {"fullname": "شافع اسراء", "section_name": "2أف1"}, {"fullname": "صابري محمد رحيم", "section_name": "2أف1"},
-    {"fullname": "صبار يسرى", "section_name": "2أف1"}, {"fullname": "صرصار ايوب", "section_name": "2أف1"},
-    {"fullname": "طباق فاطمة", "section_name": "2أف1"}, {"fullname": "عرابی لميس", "section_name": "2أف1"},
-    {"fullname": "غنومات عبد الرحمان", "section_name": "2أف1"}, {"fullname": "فقيرة غفران", "section_name": "2أف1"},
-    {"fullname": "قاضى فضيلة", "section_name": "2أف1"}, {"fullname": "قرنة لينا حنين", "section_name": "2أف1"},
-    {"fullname": "كرايي فاطمة", "section_name": "2أف1"}, {"fullname": "لبيض مختارية", "section_name": "2أف1"},
-    {"fullname": "مزاري إسماعيل", "section_name": "2أف1"}, {"fullname": "معروف يحياوي زهرة", "section_name": "2أف1"},
-    {"fullname": "بلجيلالى مختارية", "section_name": "2أف2"}, {"fullname": "بلغربي سرين سعدية", "section_name": "2أف2"},
-    {"fullname": "بلهاشمى رياض", "section_name": "2أف2"}, {"fullname": "بن عبيد منور", "section_name": "2أف2"},
-    {"fullname": "بن عمر كوثر", "section_name": "2أف2"}, {"fullname": "بو لنوار مصطفى عبد الرزاق", "section_name": "2أف2"},
-    {"fullname": "بو مدين اسماء رحمة", "section_name": "2أف2"}, {"fullname": "بوترعة مصطفى", "section_name": "2أف2"},
-    {"fullname": "بوسيف عبير فاطمة", "section_name": "2أف2"}, {"fullname": "بونعجة رميساء", "section_name": "2أف2"},
-    {"fullname": "حداد هواري", "section_name": "2أف2"}, {"fullname": "خيئر فاطمة", "section_name": "2أف2"},
-    {"fullname": "روام سريك يونس اسماعيل", "section_name": "2أف2"}, {"fullname": "ريزوقة أية", "section_name": "2أف2"},
-    {"fullname": "زازوة سندس", "section_name": "2أف2"}, {"fullname": "شنوفي حورية", "section_name": "2أف2"},
-    {"fullname": "عياشى صورية", "section_name": "2أف2"}, {"fullname": "غرناطى ألاء", "section_name": "2أف2"},
-    {"fullname": "فريفر فاطمة", "section_name": "2أف2"}, {"fullname": "قانة يونس", "section_name": "2أف2"},
-    {"fullname": "قرير روفيدة", "section_name": "2أف2"}, {"fullname": "قليليل راضية", "section_name": "2أف2"},
-    {"fullname": "كرتالي مروى", "section_name": "2أف2"}, {"fullname": "كرغلى ايناس", "section_name": "2أف2"},
-    {"fullname": "كيري هيثم وسيم", "section_name": "2أف2"}, {"fullname": "لحمر خيرة", "section_name": "2أف2"},
-    {"fullname": "لزرق سلابي محمد", "section_name": "2أف2"}, {"fullname": "لوراد سندس فاطمة", "section_name": "2أف2"},
-    {"fullname": "محنداحمد سرين", "section_name": "2أف2"}, {"fullname": "مرين كوثر", "section_name": "2أف2"},
-    {"fullname": "مصاحب سيد أحمد", "section_name": "2أف2"}, {"fullname": "ملاح العيد", "section_name": "2أف2"},
-    {"fullname": "مونسی صابرين", "section_name": "2أف2"}, {"fullname": "ميلوى فتيحة", "section_name": "2أف2"},
-    {"fullname": "نايري جميلة", "section_name": "2أف2"},
-    {"fullname": "اوعيل نصيرة", "section_name": "2لغ"}, {"fullname": "بلعباس هبة", "section_name": "2لغ"},
-    {"fullname": "بن حمر العين فراح مريم", "section_name": "2لغ"}, {"fullname": "بن عياد فاطمة الزهراء", "section_name": "2لغ"},
-    {"fullname": "بوترعة فراح", "section_name": "2لغ"}, {"fullname": "بوحريرة محمد عثمان", "section_name": "2لغ"},
-    {"fullname": "بوخيبة أيمن", "section_name": "2لغ"}, {"fullname": "بوهالي عماد", "section_name": "2لغ"},
-    {"fullname": "حمادي فاطمة الزهراء", "section_name": "2لغ"}, {"fullname": "خفافة فاطمة الزهراء", "section_name": "2لغ"},
-    {"fullname": "روام سريك رجاء", "section_name": "2لغ"}, {"fullname": "روام سريك ميلود", "section_name": "2لغ"},
-    {"fullname": "زمايش بلاحة عبد الصمد", "section_name": "2لغ"}, {"fullname": "سايح شيماء", "section_name": "2لغ"},
-    {"fullname": "سليمانى عبد الرحمان", "section_name": "2لغ"}, {"fullname": "سوالمية نورهان هدى", "section_name": "2لغ"},
-    {"fullname": "شريف حضرية فاطمة الزهراء", "section_name": "2لغ"}, {"fullname": "صحراوي ولاء شريفة", "section_name": "2لغ"},
-    {"fullname": "عقى دعاء", "section_name": "2لغ"}, {"fullname": "علمى سيرين هناء", "section_name": "2لغ"},
-    {"fullname": "فايدة مروى", "section_name": "2لغ"}, {"fullname": "قدور بن قادة سماح", "section_name": "2لغ"},
-    {"fullname": "كوار نور الهدى", "section_name": "2لغ"}, {"fullname": "لزرق شلابي سندس", "section_name": "2لغ"},
-    {"fullname": "لليبي وفية", "section_name": "2لغ"}, {"fullname": "محلى صهيب", "section_name": "2لغ"},
-    {"fullname": "مصابيح ريتاج", "section_name": "2لغ"}, {"fullname": "أزرو غزلان أماني", "section_name": "2لغ"},
-    {"fullname": "اوسيف مروى", "section_name": "2لغ"}, {"fullname": "بكاي أميرة", "section_name": "2لغ"},
-    {"fullname": "راشم شيماء", "section_name": "2لغ"}, {"fullname": "روام سريك فاطمة الزهراء", "section_name": "2لغ"},
-    {"fullname": "زلاط ياسمين", "section_name": "2لغ"}, {"fullname": "فغول أدم", "section_name": "2لغ"},
-    {"fullname": "فقيرة سلسبيل", "section_name": "2لغ"}, {"fullname": "مراح محمد عادل", "section_name": "2لغ"},
-    {"fullname": "أوجيت شهيناز", "section_name": "2ع ت1"}, {"fullname": "بلغوتي ملاك", "section_name": "2ع ت1"},
-    {"fullname": "بلميلود مروة", "section_name": "2ع ت1"}, {"fullname": "بن زهرة شهيناز", "section_name": "2ع ت1"},
-    {"fullname": "بن زهرة محمد الامين", "section_name": "2ع ت1"}, {"fullname": "بوسيف وسام", "section_name": "2ع ت1"},
-    {"fullname": "بوسيف شيماء", "section_name": "2ع ت1"}, {"fullname": "بوشيخي لجين", "section_name": "2ع ت1"},
-    {"fullname": "بوقفحة اسلام عبد الحميد نذير", "section_name": "2ع ت1"}, {"fullname": "حساين محمد رمزي", "section_name": "2ع ت1"},
-    {"fullname": "حمادي هاجر", "section_name": "2ع ت1"}, {"fullname": "حواش عبد الرحيم", "section_name": "2ع ت1"},
-    {"fullname": "خيئر نجوى", "section_name": "2ع ت1"}, {"fullname": "دركى عبد الحق", "section_name": "2ع ت1"},
-    {"fullname": "دركى رباب كوثر", "section_name": "2ع ت1"}, {"fullname": "درنى علي عبد المجيد", "section_name": "2ع ت1"},
-    {"fullname": "دلة فاطمة الزهراء", "section_name": "2ع ت1"}, {"fullname": "رامى ميلود", "section_name": "2ع ت1"},
-    {"fullname": "رميشى أكرم عماد الدين", "section_name": "2ع ت1"}, {"fullname": "زمايش منال", "section_name": "2ع ت1"},
-    {"fullname": "زوبير فاطمة زهرة", "section_name": "2ع ت1"}, {"fullname": "سدي عدة محمد", "section_name": "2ع ت1"},
-    {"fullname": "سريج فاطمة الزهراء", "section_name": "2ع ت1"}, {"fullname": "سليمانى غازي", "section_name": "2ع ت1"},
-    {"fullname": "صبار كوثر", "section_name": "2ع ت1"}, {"fullname": "صديق رياض", "section_name": "2ع ت1"},
-    {"fullname": "عامري إيمان", "section_name": "2ع ت1"}, {"fullname": "عراب رفيق", "section_name": "2ع ت1"},
-    {"fullname": "عمارة إبتسام", "section_name": "2ع ت1"}, {"fullname": "غنومات خديجة", "section_name": "2ع ت1"},
-    {"fullname": "فریوي يحي مختار علي عصام", "section_name": "2ع ت1"}, {"fullname": "قعنون فضيلة", "section_name": "2ع ت1"},
-    {"fullname": "كاملي رحيل", "section_name": "2ع ت1"}, {"fullname": "لبيض مروة", "section_name": "2ع ت1"},
-    {"fullname": "لحدير عبد الرحمان", "section_name": "2ع ت1"}, {"fullname": "لرجم إكرام كوثر", "section_name": "2ع ت1"},
-    {"fullname": "مصطفى عبد الرحيم", "section_name": "2ع ت1"}, {"fullname": "معروف يحياوي خديجة", "section_name": "2ع ت1"},
-    {"fullname": "مغوفل فاطمة الزهراء", "section_name": "2ع ت1"},
-    {"fullname": "بلبح سارة", "section_name": "2ع ت2"}, {"fullname": "بلعيدي عبد الإله", "section_name": "2ع ت2"},
-    {"fullname": "بن بلال عبد الجليل", "section_name": "2ع ت2"}, {"fullname": "بن زايد محمد أمين", "section_name": "2ع ت2"},
-    {"fullname": "بن عودة شحط مهدي", "section_name": "2ع ت2"}, {"fullname": "بن نوار عبد العزيز", "section_name": "2ع ت2"},
-    {"fullname": "بوسيف علاء الدين", "section_name": "2ع ت2"}, {"fullname": "حاج أحمد مريم", "section_name": "2ع ت2"},
-    {"fullname": "حريدي عبد الحق لخضر", "section_name": "2ع ت2"}, {"fullname": "خالدي إبتهال", "section_name": "2ع ت2"},
-    {"fullname": "خليف دنيا", "section_name": "2ع ت2"}, {"fullname": "دلهوم محمد", "section_name": "2ع ت2"},
-    {"fullname": "رفاسي محمد الامين", "section_name": "2ع ت2"}, {"fullname": "رقراق فردوس خيرة", "section_name": "2ع ت2"},
-    {"fullname": "زدام مايا", "section_name": "2ع ت2"}, {"fullname": "سهالة عبد الله فارس الدين", "section_name": "2ع ت2"},
-    {"fullname": "سى مرابط فريال", "section_name": "2ع ت2"}, {"fullname": "شاوش محمد باديس", "section_name": "2ع ت2"},
-    {"fullname": "شرقي فاطمة", "section_name": "2ع ت2"}, {"fullname": "شعيب رحاب سارة", "section_name": "2ع ت2"},
-    {"fullname": "شيخ ابراهيم", "section_name": "2ع ت2"}, {"fullname": "شيكر جاوتی عبد المجيد", "section_name": "2ع ت2"},
-    {"fullname": "صغيري وليد", "section_name": "2ع ت2"}, {"fullname": "عالم جبار ناجی", "section_name": "2ع ت2"},
-    {"fullname": "عثمانى شيماء", "section_name": "2ع ت2"}, {"fullname": "عرابة لميس", "section_name": "2ع ت2"},
-    {"fullname": "عنصر الاء", "section_name": "2ع ت2"}, {"fullname": "غيلاس فارس إسلام", "section_name": "2ع ت2"},
-    {"fullname": "فغلو خير الدين", "section_name": "2ع ت2"}, {"fullname": "قرمى رانيا", "section_name": "2ع ت2"},
-    {"fullname": "كرايی فايزة منال", "section_name": "2ع ت2"}, {"fullname": "لزرق شلابي سولا ف", "section_name": "2ع ت2"},
-    {"fullname": "ماموني نور الهدى", "section_name": "2ع ت2"}, {"fullname": "مبارك ابتسام", "section_name": "2ع ت2"},
-    {"fullname": "مسلم مروى", "section_name": "2ع ت2"}, {"fullname": "نومية عبد الله", "section_name": "2ع ت2"},
-    {"fullname": "هواري الياس", "section_name": "2ع ت2"}, {"fullname": "واحمانی عصام الدين", "section_name": "2ع ت2"},
-    {"fullname": "وليد جميلة", "section_name": "2ع ت2"}, {"fullname": "يطو دعاء", "section_name": "2ع ت2"},
-    {"fullname": "بختى ايمن", "section_name": "2تق"}, {"fullname": "بركليت حنان", "section_name": "2تق"},
-    {"fullname": "بشير عبد الإله", "section_name": "2تق"}, {"fullname": "بلعباس آية", "section_name": "2تق"},
-    {"fullname": "بلهواري بشرى", "section_name": "2تق"}, {"fullname": "بوتنزار عبدالقادر", "section_name": "2تق"},
-    {"fullname": "بودية بشرى", "section_name": "2تق"}, {"fullname": "بوشعالة ريتاج الاء", "section_name": "2تق"},
-    {"fullname": "بوقويلبة خديجة", "section_name": "2تق"}, {"fullname": "بوكبدة علاء الدين", "section_name": "2تق"},
-    {"fullname": "بولحية فاطمة الزهراء", "section_name": "2تق"}, {"fullname": "تهامى محمد الصديق", "section_name": "2تق"},
-    {"fullname": "خننو نهاد", "section_name": "2تق"}, {"fullname": "دحمانى محمد ندير", "section_name": "2تق"},
-    {"fullname": "دلباز حنان", "section_name": "2تق"}, {"fullname": "دلباز عبد الجليل", "section_name": "2تق"},
-    {"fullname": "رصانى خديجة", "section_name": "2تق"}, {"fullname": "رصانى عبد الهادي", "section_name": "2تق"},
-    {"fullname": "عشوري عبد الكريم", "section_name": "2تق"}, {"fullname": "عليلات أيهم عبد الرحمان", "section_name": "2تق"},
-    {"fullname": "غربي يوسف", "section_name": "2تق"}, {"fullname": "غمري دعاء منى", "section_name": "2تق"},
-    {"fullname": "قدورة حفصة", "section_name": "2تق"}, {"fullname": "قيري صابرين", "section_name": "2تق"},
-    {"fullname": "كرطالى ياسين", "section_name": "2تق"}, {"fullname": "لوشنى سندس", "section_name": "2تق"},
-    {"fullname": "مزغرانى عادل", "section_name": "2تق"}, {"fullname": "موساوي محمد صهيب", "section_name": "2تق"},
+    {"fullname": "زدام مايا", "section_name": "2ع ت2"},
+    {"fullname": "سهالة عبد الله فارس الدين", "section_name": "2ع ت2"},
+    {"fullname": "سى مرابط فريال", "section_name": "2ع ت2"},
+    {"fullname": "شاوش محمد باديس", "section_name": "2ع ت2"},
+    {"fullname": "شرقي فاطمة", "section_name": "2ع ت2"},
+    {"fullname": "شعيب رحاب سارة", "section_name": "2ع ت2"},
+    {"fullname": "شيخ ابراهيم", "section_name": "2ع ت2"},
+    {"fullname": "شيكر جاوتی عبد المجيد", "section_name": "2ع ت2"},
+    {"fullname": "صغيري وليد", "section_name": "2ع ت2"},
+    {"fullname": "عالم جبار ناجی", "section_name": "2ع ت2"},
+    {"fullname": "عثمانى شيماء", "section_name": "2ع ت2"},
+    {"fullname": "عرابة لميس", "section_name": "2ع ت2"},
+    {"fullname": "عنصر الاء", "section_name": "2ع ت2"},
+    {"fullname": "غيلاس فارس إسلام", "section_name": "2ع ت2"},
+    {"fullname": "فغلو خير الدين", "section_name": "2ع ت2"},
+    {"fullname": "قرمى رانيا", "section_name": "2ع ت2"},
+    {"fullname": "كرايی فايزة منال", "section_name": "2ع ت2"},
+    {"fullname": "لزرق شلابي سولا ف", "section_name": "2ع ت2"},
+    {"fullname": "ماموني نور الهدى", "section_name": "2ع ت2"},
+    {"fullname": "مبارك ابتسام", "section_name": "2ع ت2"},
+    {"fullname": "مسلم مروى", "section_name": "2ع ت2"},
+    {"fullname": "نومية عبد الله", "section_name": "2ع ت2"},
+    {"fullname": "هواري الياس", "section_name": "2ع ت2"},
+    {"fullname": "واحمانی عصام الدين", "section_name": "2ع ت2"},
+    {"fullname": "وليد جميلة", "section_name": "2ع ت2"},
+    {"fullname": "يطو دعاء", "section_name": "2ع ت2"},
+    {"fullname": "بختى ايمن", "section_name": "2تق"},
+    {"fullname": "بركليت حنان", "section_name": "2تق"},
+    {"fullname": "بشير عبد الإله", "section_name": "2تق"},
+    {"fullname": "بلعباس آية", "section_name": "2تق"},
+    {"fullname": "بلهواري بشرى", "section_name": "2تق"},
+    {"fullname": "بوتنزار عبدالقادر", "section_name": "2تق"},
+    {"fullname": "بودية بشرى", "section_name": "2تق"},
+    {"fullname": "بوشعالة ريتاج الاء", "section_name": "2تق"},
+    {"fullname": "بوقويلبة خديجة", "section_name": "2تق"},
+    {"fullname": "بوكبدة علاء الدين", "section_name": "2تق"},
+    {"fullname": "بولحية فاطمة الزهراء", "section_name": "2تق"},
+    {"fullname": "تهامى محمد الصديق", "section_name": "2تق"},
+    {"fullname": "خننو نهاد", "section_name": "2تق"},
+    {"fullname": "دحمانى محمد ندير", "section_name": "2تق"},
+    {"fullname": "دلباز حنان", "section_name": "2تق"},
+    {"fullname": "دلباز عبد الجليل", "section_name": "2تق"},
+    {"fullname": "رصانى خديجة", "section_name": "2تق"},
+    {"fullname": "رصانى عبد الهادي", "section_name": "2تق"},
+    {"fullname": "عشوري عبد الكريم", "section_name": "2تق"},
+    {"fullname": "عليلات أيهم عبد الرحمان", "section_name": "2تق"},
+    {"fullname": "غربي يوسف", "section_name": "2تق"},
+    {"fullname": "غمري دعاء منى", "section_name": "2تق"},
+    {"fullname": "قدورة حفصة", "section_name": "2تق"},
+    {"fullname": "قيري صابرين", "section_name": "2تق"},
+    {"fullname": "كرطالى ياسين", "section_name": "2تق"},
+    {"fullname": "لوشنى سندس", "section_name": "2تق"},
+    {"fullname": "مزغرانى عادل", "section_name": "2تق"},
+    {"fullname": "موساوي محمد صهيب", "section_name": "2تق"},
     {"fullname": "يطو ايمان", "section_name": "2تق"},
-    {"fullname": "بكة ريتاج", "section_name": "2ريا"}, {"fullname": "بن عبورة جنة الايمان", "section_name": "2ريا"},
-    {"fullname": "بوتين نرجس جوهر", "section_name": "2ريا"}, {"fullname": "سعد هواري ياسين", "section_name": "2ريا"},
-    {"fullname": "صحراوي صفاء", "section_name": "2ريا"}, {"fullname": "كاعوش عائشة", "section_name": "2ريا"},
-    {"fullname": "لحمر ايناس اميرة سندس", "section_name": "2ريا"}, {"fullname": "مقداد إكرام", "section_name": "2ريا"},
-    {"fullname": "بن زهرة عبد المعز", "section_name": "2تر (هـ ط)"}, {"fullname": "سنحين إكرام", "section_name": "2تر (هـ ط)"},
-    {"fullname": "عرابي بسملة", "section_name": "2تر (هـ ط)"}, {"fullname": "لعموري عائشة", "section_name": "2تر (هـ ط)"},
-    {"fullname": "مشتی اسراء", "section_name": "2تر (هـ ط)"}, {"fullname": "مهون عبد الاله", "section_name": "2تر (هـ ط)"},
-    {"fullname": "باوية محمدإحسان", "section_name": "2تر (هـ ك)"}, {"fullname": "بن زينب محمد", "section_name": "2تر (هـ ك)"},
-    {"fullname": "بن عائشة فاطمة الزهراء", "section_name": "2تر (هـ ك)"}, {"fullname": "بن علو محمد رياض", "section_name": "2تر (هـ ك)"},
-    {"fullname": "بوسيف منال سعدية", "section_name": "2تر (هـ ك)"}, {"fullname": "حسين سارة", "section_name": "2تر (هـ ك)"},
-    {"fullname": "زيري رحاب", "section_name": "2تر (هـ ك)"}, {"fullname": "سعادي أنس عبد الرحمان", "section_name": "2تر (هـ ك)"},
-    {"fullname": "سعادي ميساء", "section_name": "2تر (هـ ك)"}, {"fullname": "طيفور عزيزة", "section_name": "2تر (هـ ك)"},
+    {"fullname": "بكة ريتاج", "section_name": "2ريا"},
+    {"fullname": "بن عبورة جنة الايمان", "section_name": "2ريا"},
+    {"fullname": "بوتين نرجس جوهر", "section_name": "2ريا"},
+    {"fullname": "سعد هواري ياسين", "section_name": "2ريا"},
+    {"fullname": "صحراوي صفاء", "section_name": "2ريا"},
+    {"fullname": "كاعوش عائشة", "section_name": "2ريا"},
+    {"fullname": "لحمر ايناس اميرة سندس", "section_name": "2ريا"},
+    {"fullname": "مقداد إكرام", "section_name": "2ريا"},
+    {"fullname": "بن زهرة عبد المعز", "section_name": "2تر (هـ ط)"},
+    {"fullname": "سنحين إكرام", "section_name": "2تر (هـ ط)"},
+    {"fullname": "عرابي بسملة", "section_name": "2تر (هـ ط)"},
+    {"fullname": "لعموري عائشة", "section_name": "2تر (هـ ط)"},
+    {"fullname": "مشتی اسراء", "section_name": "2تر (هـ ط)"},
+    {"fullname": "مهون عبد الاله", "section_name": "2تر (هـ ط)"},
+    {"fullname": "باوية محمدإحسان", "section_name": "2تر (هـ ك)"},
+    {"fullname": "بن زينب محمد", "section_name": "2تر (هـ ك)"},
+    {"fullname": "بن عائشة فاطمة الزهراء", "section_name": "2تر (هـ ك)"},
+    {"fullname": "بن علو محمد رياض", "section_name": "2تر (هـ ك)"},
+    {"fullname": "بوسيف منال سعدية", "section_name": "2تر (هـ ك)"},
+    {"fullname": "حسين سارة", "section_name": "2تر (هـ ك)"},
+    {"fullname": "زيري رحاب", "section_name": "2تر (هـ ك)"},
+    {"fullname": "سعادي أنس عبد الرحمان", "section_name": "2تر (هـ ك)"},
+    {"fullname": "سعادي ميساء", "section_name": "2تر (هـ ك)"},
+    {"fullname": "طيفور عزيزة", "section_name": "2تر (هـ ك)"},
     {"fullname": "كرطالى هند", "section_name": "2تر (هـ ك)"},
-    {"fullname": "بن سعادة ماريا", "section_name": "2تر (هـ م)"}, {"fullname": "بن عائشة هاجر", "section_name": "2تر (هـ م)"},
-    {"fullname": "بوزيدي نور الهدى ليليا", "section_name": "2تر (هـ م)"}, {"fullname": "بوسيف عبد الله", "section_name": "2تر (هـ م)"},
-    {"fullname": "تلى آية", "section_name": "2تر (هـ م)"}, {"fullname": "خير الدين عبد الهادي يحيى", "section_name": "2تر (هـ م)"},
-    {"fullname": "سى فضيل عبد النور", "section_name": "2تر (هـ م)"}, {"fullname": "قرشى هديل", "section_name": "2تر (هـ م)"},
-    {"fullname": "مداح بشرى", "section_name": "2تر (هـ م)"}, {"fullname": "نوال ريهام سندس", "section_name": "2تر (هـ م)"},
-    {"fullname": "بلهزيل نور الهدى", "section_name": "3أف1"}, {"fullname": "بن زهرة آية", "section_name": "3أف1"},
-    {"fullname": "بن عودة ياسين", "section_name": "3أف1"}, {"fullname": "بن يعقوب مريم", "section_name": "3أف1"},
-    {"fullname": "بن يوس عومرية", "section_name": "3أف1"}, {"fullname": "بوخاري خضرة فدوى", "section_name": "3أف1"},
-    {"fullname": "بوشنتوف أحمد إسلام", "section_name": "3أف1"}, {"fullname": "بونعجة عائشة", "section_name": "3أف1"},
-    {"fullname": "تركي كوثر", "section_name": "3أف1"}, {"fullname": "تقار اخلاص", "section_name": "3أف1"},
-    {"fullname": "جعلاب ليندة", "section_name": "3أف1"}, {"fullname": "حروس آية", "section_name": "3أف1"},
-    {"fullname": "رصانی غزلان حسنية", "section_name": "3أف1"}, {"fullname": "رصانی خديجة وردية", "section_name": "3أف1"},
-    {"fullname": "سلام عبدالقادر محمد امين", "section_name": "3أف1"}, {"fullname": "سواحلية صالحية اسراء", "section_name": "3أف1"},
-    {"fullname": "شحمی نادية", "section_name": "3أف1"}, {"fullname": "شيخ عادل", "section_name": "3أف1"},
-    {"fullname": "عبادية مروى", "section_name": "3أف1"}, {"fullname": "عدة امينة", "section_name": "3أف1"},
-    {"fullname": "عمري زهرة آية", "section_name": "3أف1"}, {"fullname": "عيساوي يوسف", "section_name": "3أف1"},
-    {"fullname": "فايدة دعاء خديجة", "section_name": "3أف1"}, {"fullname": "فركان ياسمين", "section_name": "3أف1"},
-    {"fullname": "قرنة صورية", "section_name": "3أف1"}, {"fullname": "لحسن محمد امين", "section_name": "3أف1"},
-    {"fullname": "مختاري فضيلة", "section_name": "3أف1"}, {"fullname": "مداح روبة", "section_name": "3أف1"},
-    {"fullname": "مزيان نور الإيمان", "section_name": "3أف1"}, {"fullname": "مسعودي يوسف رزق الله", "section_name": "3أف1"},
-    {"fullname": "العقون حسناء", "section_name": "3أف2"}, {"fullname": "براهيمي بسملة", "section_name": "3أف2"},
-    {"fullname": "بلعوني ابتهال وداد", "section_name": "3أف2"}, {"fullname": "بن عمر صليحة", "section_name": "3أف2"},
-    {"fullname": "بودية الياس", "section_name": "3أف2"}, {"fullname": "بوعجامة دعاء", "section_name": "3أف2"},
-    {"fullname": "بولنوار بلقيس", "section_name": "3أف2"}, {"fullname": "جلابت عبد الحق", "section_name": "3أف2"},
-    {"fullname": "حري وليد", "section_name": "3أف2"}, {"fullname": "حسيني أية", "section_name": "3أف2"},
-    {"fullname": "حكو دنيا انفال", "section_name": "3أف2"}, {"fullname": "داني أسماء", "section_name": "3أف2"},
-    {"fullname": "روام سريك عبد الله", "section_name": "3أف2"}, {"fullname": "روام سريك ملاك", "section_name": "3أف2"},
-    {"fullname": "زكار سموم سارة", "section_name": "3أف2"}, {"fullname": "زيانی أيمن", "section_name": "3أف2"},
-    {"fullname": "شحمی تسنيم", "section_name": "3أف2"}, {"fullname": "شيخ محمد الامين", "section_name": "3أف2"},
-    {"fullname": "عويسات يمنى", "section_name": "3أف2"}, {"fullname": "غرزولي زوليخة", "section_name": "3أف2"},
-    {"fullname": "فريح آية", "section_name": "3أف2"}, {"fullname": "قاسم بن علي أمين", "section_name": "3أف2"},
-    {"fullname": "قداري يمينة ام الدنيا وسام", "section_name": "3أف2"}, {"fullname": "كشاي هبة اخلاص", "section_name": "3أف2"},
-    {"fullname": "لحسن مليكة", "section_name": "3أف2"}, {"fullname": "لزرق عبد القادر", "section_name": "3أف2"},
-    {"fullname": "منصوري محمد يوسف نزيم", "section_name": "3أف2"}, {"fullname": "موساوي ريحانة", "section_name": "3أف2"},
-    {"fullname": "ناصر الشرقي دنيا", "section_name": "3أف2"}, {"fullname": "ناصر الشرقي امين", "section_name": "3أف2"},
-    {"fullname": "ناصر الشرقي فاطمة", "section_name": "3أف2"}, {"fullname": "نوقعة لميس", "section_name": "3أف2"},
+    {"fullname": "بن سعادة ماريا", "section_name": "2تر (هـ م)"},
+    {"fullname": "بن عائشة هاجر", "section_name": "2تر (هـ م)"},
+    {"fullname": "بوزيدي نور الهدى ليليا", "section_name": "2تر (هـ م)"},
+    {"fullname": "بوسيف عبد الله", "section_name": "2تر (هـ م)"},
+    {"fullname": "تلى آية", "section_name": "2تر (هـ م)"},
+    {"fullname": "خير الدين عبد الهادي يحيى", "section_name": "2تر (هـ م)"},
+    {"fullname": "سى فضيل عبد النور", "section_name": "2تر (هـ م)"},
+    {"fullname": "قرشى هديل", "section_name": "2تر (هـ م)"},
+    {"fullname": "مداح بشرى", "section_name": "2تر (هـ م)"},
+    {"fullname": "نوال ريهام سندس", "section_name": "2تر (هـ م)"},
+    {"fullname": "بلهزيل نور الهدى", "section_name": "3أف1"},
+    {"fullname": "بن زهرة آية", "section_name": "3أف1"},
+    {"fullname": "بن عودة ياسين", "section_name": "3أف1"},
+    {"fullname": "بن يعقوب مريم", "section_name": "3أف1"},
+    {"fullname": "بن يوس عومرية", "section_name": "3أف1"},
+    {"fullname": "بوخاري خضرة فدوى", "section_name": "3أف1"},
+    {"fullname": "بوشنتوف أحمد إسلام", "section_name": "3أف1"},
+    {"fullname": "بونعجة عائشة", "section_name": "3أف1"},
+    {"fullname": "تركي كوثر", "section_name": "3أف1"},
+    {"fullname": "تقار اخلاص", "section_name": "3أف1"},
+    {"fullname": "جعلاب ليندة", "section_name": "3أف1"},
+    {"fullname": "حروس آية", "section_name": "3أف1"},
+    {"fullname": "رصانی غزلان حسنية", "section_name": "3أف1"},
+    {"fullname": "رصانی خديجة وردية", "section_name": "3أف1"},
+    {"fullname": "سلام عبدالقادر محمد امين", "section_name": "3أف1"},
+    {"fullname": "سواحلية صالحية اسراء", "section_name": "3أف1"},
+    {"fullname": "شحمی نادية", "section_name": "3أف1"},
+    {"fullname": "شيخ عادل", "section_name": "3أف1"},
+    {"fullname": "عبادية مروى", "section_name": "3أف1"},
+    {"fullname": "عدة امينة", "section_name": "3أف1"},
+    {"fullname": "عمري زهرة آية", "section_name": "3أف1"},
+    {"fullname": "عيساوي يوسف", "section_name": "3أف1"},
+    {"fullname": "فايدة دعاء خديجة", "section_name": "3أف1"},
+    {"fullname": "فركان ياسمين", "section_name": "3أف1"},
+    {"fullname": "قرنة صورية", "section_name": "3أف1"},
+    {"fullname": "لحسن محمد امين", "section_name": "3أف1"},
+    {"fullname": "مختاري فضيلة", "section_name": "3أف1"},
+    {"fullname": "مداح روبة", "section_name": "3أف1"},
+    {"fullname": "مزيان نور الإيمان", "section_name": "3أف1"},
+    {"fullname": "مسعودي يوسف رزق الله", "section_name": "3أف1"},
+    {"fullname": "العقون حسناء", "section_name": "3أف2"},
+    {"fullname": "براهيمي بسملة", "section_name": "3أف2"},
+    {"fullname": "بلعوني ابتهال وداد", "section_name": "3أف2"},
+    {"fullname": "بن عمر صليحة", "section_name": "3أف2"},
+    {"fullname": "بودية الياس", "section_name": "3أف2"},
+    {"fullname": "بوعجامة دعاء", "section_name": "3أف2"},
+    {"fullname": "بولنوار بلقيس", "section_name": "3أف2"},
+    {"fullname": "جلابت عبد الحق", "section_name": "3أف2"},
+    {"fullname": "حري وليد", "section_name": "3أف2"},
+    {"fullname": "حسيني أية", "section_name": "3أف2"},
+    {"fullname": "حكو دنيا انفال", "section_name": "3أف2"},
+    {"fullname": "داني أسماء", "section_name": "3أف2"},
+    {"fullname": "روام سريك عبد الله", "section_name": "3أف2"},
+    {"fullname": "روام سريك ملاك", "section_name": "3أف2"},
+    {"fullname": "زكار سموم سارة", "section_name": "3أف2"},
+    {"fullname": "زيانی أيمن", "section_name": "3أف2"},
+    {"fullname": "شحمی تسنيم", "section_name": "3أف2"},
+    {"fullname": "شيخ محمد الامين", "section_name": "3أف2"},
+    {"fullname": "عويسات يمنى", "section_name": "3أف2"},
+    {"fullname": "غرزولي زوليخة", "section_name": "3أف2"},
+    {"fullname": "فريح آية", "section_name": "3أف2"},
+    {"fullname": "قاسم بن علي أمين", "section_name": "3أف2"},
+    {"fullname": "قداري يمينة ام الدنيا وسام", "section_name": "3أف2"},
+    {"fullname": "كشاي هبة اخلاص", "section_name": "3أف2"},
+    {"fullname": "لحسن مليكة", "section_name": "3أف2"},
+    {"fullname": "لزرق عبد القادر", "section_name": "3أف2"},
+    {"fullname": "منصوري محمد يوسف نزيم", "section_name": "3أف2"},
+    {"fullname": "موساوي ريحانة", "section_name": "3أف2"},
+    {"fullname": "ناصر الشرقي دنيا", "section_name": "3أف2"},
+    {"fullname": "ناصر الشرقي امين", "section_name": "3أف2"},
+    {"fullname": "ناصر الشرقي فاطمة", "section_name": "3أف2"},
+    {"fullname": "نوقعة لميس", "section_name": "3أف2"},
     {"fullname": "وعمارة ريان", "section_name": "3أف2"},
-    {"fullname": "أحمد بلاحة زينب", "section_name": "3لغ (إسبانية)"}, {"fullname": "الشرقى محمد عماد الدين", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "بختاوي ريمة", "section_name": "3لغ (إسبانية)"}, {"fullname": "بن مقداد سولاف", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "بو عبد الله نسرين", "section_name": "3لغ (إسبانية)"}, {"fullname": "بوجراف مروى", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "بوخرطة حمزة", "section_name": "3لغ (إسبانية)"}, {"fullname": "بولحية مهدي", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "جفال مهدي سايح", "section_name": "3لغ (إسبانية)"}, {"fullname": "حمو ابراهيم", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "دودوح مريم دعاء", "section_name": "3لغ (إسبانية)"}, {"fullname": "رحماني اسلام", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "عبد السلام سندس رتاج صورية", "section_name": "3لغ (إسبانية)"}, {"fullname": "عراب سعيد جوهرة ملاك", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "عكرمى رميساء", "section_name": "3لغ (إسبانية)"}, {"fullname": "علواش محمد الامين", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "عمایم حفصة", "section_name": "3لغ (إسبانية)"}, {"fullname": "غريبي أروة سرين", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "فايدة مارية", "section_name": "3لغ (إسبانية)"}, {"fullname": "فريفر إبتسام", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "فيدوح دعاء", "section_name": "3لغ (إسبانية)"}, {"fullname": "كبداني سندس", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "كتاب شيماء", "section_name": "3لغ (إسبانية)"}, {"fullname": "مشري مختارية", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "مصابيح إسراء", "section_name": "3لغ (إسبانية)"}, {"fullname": "مقدم بحوص فاروق", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "نباتى شرقي فريال", "section_name": "3لغ (إسبانية)"}, {"fullname": "يوكلف يسرى", "section_name": "3لغ (إسبانية)"},
-    {"fullname": "بخدة هبة الرحمن", "section_name": "3لغ (ألمانية)"}, {"fullname": "بن سالم دعاء", "section_name": "3لغ (ألمانية)"},
-    {"fullname": "بوشنتوف نسرين بدرة", "section_name": "3لغ (ألمانية)"}, {"fullname": "جعييد يمينة ملاك", "section_name": "3لغ (ألمانية)"},
-    {"fullname": "راشم آدم", "section_name": "3لغ (ألمانية)"}, {"fullname": "سريج سارة", "section_name": "3لغ (ألمانية)"},
-    {"fullname": "صور رودينة جيداء", "section_name": "3لغ (ألمانية)"}, {"fullname": "طويل مروى", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "أحمد بلاحة زينب", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "الشرقى محمد عماد الدين", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "بختاوي ريمة", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "بن مقداد سولاف", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "بو عبد الله نسرين", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "بوجراف مروى", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "بوخرطة حمزة", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "بولحية مهدي", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "جفال مهدي سايح", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "حمو ابراهيم", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "دودوح مريم دعاء", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "رحماني اسلام", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "عبد السلام سندس رتاج صورية", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "عراب سعيد جوهرة ملاك", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "عكرمى رميساء", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "علواش محمد الامين", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "عمایم حفصة", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "غريبي أروة سرين", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "فايدة مارية", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "فريفر إبتسام", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "فيدوح دعاء", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "كبداني سندس", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "كتاب شيماء", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "مشري مختارية", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "مصابيح إسراء", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "مقدم بحوص فاروق", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "نباتى شرقي فريال", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "يوكلف يسرى", "section_name": "3لغ (إسبانية)"},
+    {"fullname": "بخدة هبة الرحمن", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "بن سالم دعاء", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "بوشنتوف نسرين بدرة", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "جعييد يمينة ملاك", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "راشم آدم", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "سريج سارة", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "صور رودينة جيداء", "section_name": "3لغ (ألمانية)"},
+    {"fullname": "طويل مروى", "section_name": "3لغ (ألمانية)"},
     {"fullname": "عبو عبد المالك", "section_name": "3لغ (ألمانية)"},
-    {"fullname": "بحيرة اسراء تسنيم", "section_name": "3ع ت1"}, {"fullname": "بشحط يسرى", "section_name": "3ع ت1"},
-    {"fullname": "بلزرق رميساء", "section_name": "3ع ت1"}, {"fullname": "بلعيدي آية", "section_name": "3ع ت1"},
-    {"fullname": "بن سعيد تسنيم", "section_name": "3ع ت1"}, {"fullname": "بن سعيد يوسف", "section_name": "3ع ت1"},
-    {"fullname": "بن عبد الرحمان آدم", "section_name": "3ع ت1"}, {"fullname": "بوجمعة عبد القادر", "section_name": "3ع ت1"},
-    {"fullname": "بوشارب إكرام", "section_name": "3ع ت1"}, {"fullname": "بوليلة بشرى", "section_name": "3ع ت1"},
-    {"fullname": "تابت خديجة", "section_name": "3ع ت1"}, {"fullname": "خننو مروان", "section_name": "3ع ت1"},
-    {"fullname": "دهاص بشرى رهام", "section_name": "3ع ت1"}, {"fullname": "رصاني على أبو الأنوار", "section_name": "3ع ت1"},
-    {"fullname": "رقاب رؤية", "section_name": "3ع ت1"}, {"fullname": "ريزوقة اكرام", "section_name": "3ع ت1"},
-    {"fullname": "زهراوي نسرين", "section_name": "3ع ت1"}, {"fullname": "زهير علاء الدين", "section_name": "3ع ت1"},
-    {"fullname": "زيان وهيبة", "section_name": "3ع ت1"}, {"fullname": "سايح فاطمة الزهراء", "section_name": "3ع ت1"},
-    {"fullname": "سحنون دعاء", "section_name": "3ع ت1"}, {"fullname": "سمون سندس", "section_name": "3ع ت1"},
-    {"fullname": "سي زياني عبد الخالق", "section_name": "3ع ت1"}, {"fullname": "شريفي حليمة خيرة", "section_name": "3ع ت1"},
-    {"fullname": "شمالي ندى", "section_name": "3ع ت1"}, {"fullname": "صابر مليكة", "section_name": "3ع ت1"},
-    {"fullname": "صابر سمية", "section_name": "3ع ت1"}, {"fullname": "عالم جبار نورهان", "section_name": "3ع ت1"},
-    {"fullname": "عبيد خالد", "section_name": "3ع ت1"}, {"fullname": "عدوش فتحي", "section_name": "3ع ت1"},
-    {"fullname": "غمري ملاك الرحمان", "section_name": "3ع ت1"}, {"fullname": "فارس عائشة", "section_name": "3ع ت1"},
-    {"fullname": "كاتب الهاشمي مروى", "section_name": "3ع ت1"}, {"fullname": "كرسيفان مهجية", "section_name": "3ع ت1"},
-    {"fullname": "كرطالي عبد الرحمان", "section_name": "3ع ت1"}, {"fullname": "كساني فاطمة الزهراء", "section_name": "3ع ت1"},
-    {"fullname": "لزاج فاطمة الزهراء", "section_name": "3ع ت1"}, {"fullname": "لعور نادية أمينة", "section_name": "3ع ت1"},
-    {"fullname": "مخيسي حليمة", "section_name": "3ع ت1"}, {"fullname": "مرحوم عبدالرحمان", "section_name": "3ع ت1"},
-    {"fullname": "مقدم إكرام", "section_name": "3ع ت1"}, {"fullname": "نباتي الشرقي ايمان", "section_name": "3ع ت1"},
-    {"fullname": "نباتي شرقي شيماء", "section_name": "3ع ت1"}, {"fullname": "نومية سهام حميدة", "section_name": "3ع ت1"},
-    {"fullname": "العربي اخلاص", "section_name": "3ع ت2"}, {"fullname": "اليوبي إسراء إلهام", "section_name": "3ع ت2"},
-    {"fullname": "بركاني عبد المالك", "section_name": "3ع ت2"}, {"fullname": "بلحميدي خولة", "section_name": "3ع ت2"},
-    {"fullname": "بلمختار سناء", "section_name": "3ع ت2"}, {"fullname": "بلميلود أية", "section_name": "3ع ت2"},
-    {"fullname": "بن طاطة أميرة", "section_name": "3ع ت2"}, {"fullname": "بن فغول أية", "section_name": "3ع ت2"},
-    {"fullname": "بن قانة سكينة", "section_name": "3ع ت2"}, {"fullname": "بن ناجي سلسبيل", "section_name": "3ع ت2"},
-    {"fullname": "بن يمينة لميس", "section_name": "3ع ت2"}, {"fullname": "بوتشيش عبد الصمد", "section_name": "3ع ت2"},
-    {"fullname": "بوتنزاز محمد يحي", "section_name": "3ع ت2"}, {"fullname": "بوسيف شيماء", "section_name": "3ع ت2"},
-    {"fullname": "تشمون محمد", "section_name": "3ع ت2"}, {"fullname": "جبور نادية", "section_name": "3ع ت2"},
-    {"fullname": "حاسي عبدالقادر صلاح الدين", "section_name": "3ع ت2"}, {"fullname": "حتو مروى", "section_name": "3ع ت2"},
-    {"fullname": "حمزة آية سيرين", "section_name": "3ع ت2"}, {"fullname": "خلق الله حبيب", "section_name": "3ع ت2"},
-    {"fullname": "داني معاد بن جبل", "section_name": "3ع ت2"}, {"fullname": "درواش هبة الرحمان غزلان", "section_name": "3ع ت2"},
-    {"fullname": "روام سريك هدى", "section_name": "3ع ت2"}, {"fullname": "ريزوقة كوثر", "section_name": "3ع ت2"},
-    {"fullname": "شباح وفاء", "section_name": "3ع ت2"}, {"fullname": "شحمي حفصة", "section_name": "3ع ت2"},
-    {"fullname": "شنوفي وداد وردة", "section_name": "3ع ت2"}, {"fullname": "شوايل شايلة غالم ريان", "section_name": "3ع ت2"},
-    {"fullname": "صويلح منال", "section_name": "3ع ت2"}, {"fullname": "عبادية نجوى سارة", "section_name": "3ع ت2"},
-    {"fullname": "غربي أيوب", "section_name": "3ع ت2"}, {"fullname": "قطاف جهينة", "section_name": "3ع ت2"},
-    {"fullname": "كاشة محمد", "section_name": "3ع ت2"}, {"fullname": "كرطالي سناء", "section_name": "3ع ت2"},
-    {"fullname": "كرطالي عبد الباسط براء", "section_name": "3ع ت2"}, {"fullname": "كرطالي عبد القادر", "section_name": "3ع ت2"},
-    {"fullname": "لزغم عبد النور", "section_name": "3ع ت2"}, {"fullname": "لمقدم هبة الرحمان غزلان", "section_name": "3ع ت2"},
-    {"fullname": "لمقدم اسراء", "section_name": "3ع ت2"}, {"fullname": "مولوج دحو محمد", "section_name": "3ع ت2"},
-    {"fullname": "ناصر شرقي ادم محمد", "section_name": "3ع ت2"}, {"fullname": "ولد سليمان مروان", "section_name": "3ع ت2"},
+    {"fullname": "بحيرة اسراء تسنيم", "section_name": "3ع ت1"},
+    {"fullname": "بشحط يسرى", "section_name": "3ع ت1"},
+    {"fullname": "بلزرق رميساء", "section_name": "3ع ت1"},
+    {"fullname": "بلعيدي آية", "section_name": "3ع ت1"},
+    {"fullname": "بن سعيد تسنيم", "section_name": "3ع ت1"},
+    {"fullname": "بن سعيد يوسف", "section_name": "3ع ت1"},
+    {"fullname": "بن عبد الرحمان آدم", "section_name": "3ع ت1"},
+    {"fullname": "بوجمعة عبد القادر", "section_name": "3ع ت1"},
+    {"fullname": "بوشارب إكرام", "section_name": "3ع ت1"},
+    {"fullname": "بوليلة بشرى", "section_name": "3ع ت1"},
+    {"fullname": "تابت خديجة", "section_name": "3ع ت1"},
+    {"fullname": "خننو مروان", "section_name": "3ع ت1"},
+    {"fullname": "دهاص بشرى رهام", "section_name": "3ع ت1"},
+    {"fullname": "رصاني على أبو الأنوار", "section_name": "3ع ت1"},
+    {"fullname": "رقاب رؤية", "section_name": "3ع ت1"},
+    {"fullname": "ريزوقة اكرام", "section_name": "3ع ت1"},
+    {"fullname": "زهراوي نسرين", "section_name": "3ع ت1"},
+    {"fullname": "زهير علاء الدين", "section_name": "3ع ت1"},
+    {"fullname": "زيان وهيبة", "section_name": "3ع ت1"},
+    {"fullname": "سايح فاطمة الزهراء", "section_name": "3ع ت1"},
+    {"fullname": "سحنون دعاء", "section_name": "3ع ت1"},
+    {"fullname": "سمون سندس", "section_name": "3ع ت1"},
+    {"fullname": "سي زياني عبد الخالق", "section_name": "3ع ت1"},
+    {"fullname": "شريفي حليمة خيرة", "section_name": "3ع ت1"},
+    {"fullname": "شمالي ندى", "section_name": "3ع ت1"},
+    {"fullname": "صابر مليكة", "section_name": "3ع ت1"},
+    {"fullname": "صابر سمية", "section_name": "3ع ت1"},
+    {"fullname": "عالم جبار نورهان", "section_name": "3ع ت1"},
+    {"fullname": "عبيد خالد", "section_name": "3ع ت1"},
+    {"fullname": "عدوش فتحي", "section_name": "3ع ت1"},
+    {"fullname": "غمري ملاك الرحمان", "section_name": "3ع ت1"},
+    {"fullname": "فارس عائشة", "section_name": "3ع ت1"},
+    {"fullname": "كاتب الهاشمي مروى", "section_name": "3ع ت1"},
+    {"fullname": "كرسيفان مهجية", "section_name": "3ع ت1"},
+    {"fullname": "كرطالي عبد الرحمان", "section_name": "3ع ت1"},
+    {"fullname": "كساني فاطمة الزهراء", "section_name": "3ع ت1"},
+    {"fullname": "لزاج فاطمة الزهراء", "section_name": "3ع ت1"},
+    {"fullname": "لعور نادية أمينة", "section_name": "3ع ت1"},
+    {"fullname": "مخيسي حليمة", "section_name": "3ع ت1"},
+    {"fullname": "مرحوم عبدالرحمان", "section_name": "3ع ت1"},
+    {"fullname": "مقدم إكرام", "section_name": "3ع ت1"},
+    {"fullname": "نباتي الشرقي ايمان", "section_name": "3ع ت1"},
+    {"fullname": "نباتي شرقي شيماء", "section_name": "3ع ت1"},
+    {"fullname": "نومية سهام حميدة", "section_name": "3ع ت1"},
+    {"fullname": "العربي اخلاص", "section_name": "3ع ت2"},
+    {"fullname": "اليوبي إسراء إلهام", "section_name": "3ع ت2"},
+    {"fullname": "بركاني عبد المالك", "section_name": "3ع ت2"},
+    {"fullname": "بلحميدي خولة", "section_name": "3ع ت2"},
+    {"fullname": "بلمختار سناء", "section_name": "3ع ت2"},
+    {"fullname": "بلميلود أية", "section_name": "3ع ت2"},
+    {"fullname": "بن طاطة أميرة", "section_name": "3ع ت2"},
+    {"fullname": "بن فغول أية", "section_name": "3ع ت2"},
+    {"fullname": "بن قانة سكينة", "section_name": "3ع ت2"},
+    {"fullname": "بن ناجي سلسبيل", "section_name": "3ع ت2"},
+    {"fullname": "بن يمينة لميس", "section_name": "3ع ت2"},
+    {"fullname": "بوتشيش عبد الصمد", "section_name": "3ع ت2"},
+    {"fullname": "بوتنزاز محمد يحي", "section_name": "3ع ت2"},
+    {"fullname": "بوسيف شيماء", "section_name": "3ع ت2"},
+    {"fullname": "تشمون محمد", "section_name": "3ع ت2"},
+    {"fullname": "جبور نادية", "section_name": "3ع ت2"},
+    {"fullname": "حاسي عبدالقادر صلاح الدين", "section_name": "3ع ت2"},
+    {"fullname": "حتو مروى", "section_name": "3ع ت2"},
+    {"fullname": "حمزة آية سيرين", "section_name": "3ع ت2"},
+    {"fullname": "خلق الله حبيب", "section_name": "3ع ت2"},
+    {"fullname": "داني معاد بن جبل", "section_name": "3ع ت2"},
+    {"fullname": "درواش هبة الرحمان غزلان", "section_name": "3ع ت2"},
+    {"fullname": "روام سريك هدى", "section_name": "3ع ت2"},
+    {"fullname": "ريزوقة كوثر", "section_name": "3ع ت2"},
+    {"fullname": "شباح وفاء", "section_name": "3ع ت2"},
+    {"fullname": "شحمي حفصة", "section_name": "3ع ت2"},
+    {"fullname": "شنوفي وداد وردة", "section_name": "3ع ت2"},
+    {"fullname": "شوايل شايلة غالم ريان", "section_name": "3ع ت2"},
+    {"fullname": "صويلح منال", "section_name": "3ع ت2"},
+    {"fullname": "عبادية نجوى سارة", "section_name": "3ع ت2"},
+    {"fullname": "غربي أيوب", "section_name": "3ع ت2"},
+    {"fullname": "قطاف جهينة", "section_name": "3ع ت2"},
+    {"fullname": "كاشة محمد", "section_name": "3ع ت2"},
+    {"fullname": "كرطالي سناء", "section_name": "3ع ت2"},
+    {"fullname": "كرطالي عبد الباسط براء", "section_name": "3ع ت2"},
+    {"fullname": "كرطالي عبد القادر", "section_name": "3ع ت2"},
+    {"fullname": "لزغم عبد النور", "section_name": "3ع ت2"},
+    {"fullname": "لمقدم هبة الرحمان غزلان", "section_name": "3ع ت2"},
+    {"fullname": "لمقدم اسراء", "section_name": "3ع ت2"},
+    {"fullname": "مولوج دحو محمد", "section_name": "3ع ت2"},
+    {"fullname": "ناصر شرقي ادم محمد", "section_name": "3ع ت2"},
+    {"fullname": "ولد سليمان مروان", "section_name": "3ع ت2"},
     {"fullname": "يطو ياسين", "section_name": "3ع ت2"},
-    {"fullname": "بطيشة محمد", "section_name": "3تق"}, {"fullname": "بلعاطى مختارية", "section_name": "3تق"},
-    {"fullname": "بلعيدي فاطمة", "section_name": "3تق"}, {"fullname": "بلميلود دعاء", "section_name": "3تق"},
-    {"fullname": "بن سعيد نور الهدى", "section_name": "3تق"}, {"fullname": "بن يوب نجاة", "section_name": "3تق"},
-    {"fullname": "بوعزة سندس", "section_name": "3تق"}, {"fullname": "تامدة شيماء", "section_name": "3تق"},
-    {"fullname": "تقار دعاء", "section_name": "3تق"}, {"fullname": "تومى إسحاق مسعود أحمد", "section_name": "3تق"},
-    {"fullname": "جعفري ملاك", "section_name": "3تق"}, {"fullname": "جلول عبد الاله اسلام", "section_name": "3تق"},
-    {"fullname": "حرطال عاشورية دعاء", "section_name": "3تق"}, {"fullname": "رابح سمية", "section_name": "3تق"},
-    {"fullname": "زيان يونس اسلام", "section_name": "3تق"}, {"fullname": "زيري نسرين", "section_name": "3تق"},
-    {"fullname": "سايح كوثر", "section_name": "3تق"}, {"fullname": "سعود محمد علاء الدين", "section_name": "3تق"},
-    {"fullname": "سى مرابط أمال", "section_name": "3تق"}, {"fullname": "شكور يوسف", "section_name": "3تق"},
-    {"fullname": "صرصار أحمد مجيب الرحمان", "section_name": "3تق"}, {"fullname": "عبوشى لخضر", "section_name": "3تق"},
-    {"fullname": "عتو ميلود ياسين", "section_name": "3تق"}, {"fullname": "عرابة محمد ربيع", "section_name": "3تق"},
-    {"fullname": "عطا الله مريم", "section_name": "3تق"}, {"fullname": "فريح إسماعيل", "section_name": "3تق"},
-    {"fullname": "قادري يوسف", "section_name": "3تق"}, {"fullname": "قليل مروى", "section_name": "3تق"},
-    {"fullname": "قليل حسام الدين", "section_name": "3تق"}, {"fullname": "مصابيح ياسر", "section_name": "3تق"},
-    {"fullname": "مقداد يوسف", "section_name": "3تق"}, {"fullname": "ياحي لقمان", "section_name": "3تق"},
-    {"fullname": "بلميلود منال", "section_name": "3ريا"}, {"fullname": "بوسيف أكرم سليمان", "section_name": "3ريا"},
-    {"fullname": "حجار عبد الرحمن", "section_name": "3ريا"}, {"fullname": "خليفي أميمة", "section_name": "3ريا"},
-    {"fullname": "سبع شهيناز", "section_name": "3ريا"}, {"fullname": "شبوب نسرين", "section_name": "3ريا"},
-    {"fullname": "شلقوم أشواق ليلى", "section_name": "3ريا"}, {"fullname": "صابر أسامة", "section_name": "3ريا"},
-    {"fullname": "عامر محلى عثمان", "section_name": "3ريا"}, {"fullname": "غريسى هاجر منال", "section_name": "3ريا"},
-    {"fullname": "قليل عصام الدين", "section_name": "3ريا"}, {"fullname": "منقور منال", "section_name": "3ريا"},
-    {"fullname": "بغداد تسنيم", "section_name": "3تر (هـ ك)"}, {"fullname": "بلزرق إياد محمد أمين", "section_name": "3تر (هـ ك)"},
-    {"fullname": "بلعوينات عبد الرزاق", "section_name": "3تر (هـ ك)"}, {"fullname": "بوجمعة محمد ياسين", "section_name": "3تر (هـ ك)"},
-    {"fullname": "بوزيدي محمد", "section_name": "3تر (هـ ك)"}, {"fullname": "بوشتة وهيبة", "section_name": "3تر (هـ ك)"},
-    {"fullname": "بوعقل عبد المجيد", "section_name": "3تر (هـ ك)"}, {"fullname": "مصالح محمد صهيب", "section_name": "3تر (هـ ك)"},
+    {"fullname": "بطيشة محمد", "section_name": "3تق"},
+    {"fullname": "بلعاطى مختارية", "section_name": "3تق"},
+    {"fullname": "بلعيدي فاطمة", "section_name": "3تق"},
+    {"fullname": "بلميلود دعاء", "section_name": "3تق"},
+    {"fullname": "بن سعيد نور الهدى", "section_name": "3تق"},
+    {"fullname": "بن يوب نجاة", "section_name": "3تق"},
+    {"fullname": "بوعزة سندس", "section_name": "3تق"},
+    {"fullname": "تامدة شيماء", "section_name": "3تق"},
+    {"fullname": "تقار دعاء", "section_name": "3تق"},
+    {"fullname": "تومى إسحاق مسعود أحمد", "section_name": "3تق"},
+    {"fullname": "جعفري ملاك", "section_name": "3تق"},
+    {"fullname": "جلول عبد الاله اسلام", "section_name": "3تق"},
+    {"fullname": "حرطال عاشورية دعاء", "section_name": "3تق"},
+    {"fullname": "رابح سمية", "section_name": "3تق"},
+    {"fullname": "زيان يونس اسلام", "section_name": "3تق"},
+    {"fullname": "زيري نسرين", "section_name": "3تق"},
+    {"fullname": "سايح كوثر", "section_name": "3تق"},
+    {"fullname": "سعود محمد علاء الدين", "section_name": "3تق"},
+    {"fullname": "سى مرابط أمال", "section_name": "3تق"},
+    {"fullname": "شكور يوسف", "section_name": "3تق"},
+    {"fullname": "صرصار أحمد مجيب الرحمان", "section_name": "3تق"},
+    {"fullname": "عبوشى لخضر", "section_name": "3تق"},
+    {"fullname": "عتو ميلود ياسين", "section_name": "3تق"},
+    {"fullname": "عرابة محمد ربيع", "section_name": "3تق"},
+    {"fullname": "عطا الله مريم", "section_name": "3تق"},
+    {"fullname": "فريح إسماعيل", "section_name": "3تق"},
+    {"fullname": "قادري يوسف", "section_name": "3تق"},
+    {"fullname": "قليل مروى", "section_name": "3تق"},
+    {"fullname": "قليل حسام الدين", "section_name": "3تق"},
+    {"fullname": "مصابيح ياسر", "section_name": "3تق"},
+    {"fullname": "مقداد يوسف", "section_name": "3تق"},
+    {"fullname": "ياحي لقمان", "section_name": "3تق"},
+    {"fullname": "بلميلود منال", "section_name": "3ريا"},
+    {"fullname": "بوسيف أكرم سليمان", "section_name": "3ريا"},
+    {"fullname": "حجار عبد الرحمن", "section_name": "3ريا"},
+    {"fullname": "خليفي أميمة", "section_name": "3ريا"},
+    {"fullname": "سبع شهيناز", "section_name": "3ريا"},
+    {"fullname": "شبوب نسرين", "section_name": "3ريا"},
+    {"fullname": "شلقوم أشواق ليلى", "section_name": "3ريا"},
+    {"fullname": "صابر أسامة", "section_name": "3ريا"},
+    {"fullname": "عامر محلى عثمان", "section_name": "3ريا"},
+    {"fullname": "غريسى هاجر منال", "section_name": "3ريا"},
+    {"fullname": "قليل عصام الدين", "section_name": "3ريا"},
+    {"fullname": "منقور منال", "section_name": "3ريا"},
+    {"fullname": "بغداد تسنيم", "section_name": "3تر (هـ ك)"},
+    {"fullname": "بلزرق إياد محمد أمين", "section_name": "3تر (هـ ك)"},
+    {"fullname": "بلعوينات عبد الرزاق", "section_name": "3تر (هـ ك)"},
+    {"fullname": "بوجمعة محمد ياسين", "section_name": "3تر (هـ ك)"},
+    {"fullname": "بوزيدي محمد", "section_name": "3تر (هـ ك)"},
+    {"fullname": "بوشتة وهيبة", "section_name": "3تر (هـ ك)"},
+    {"fullname": "بوعقل عبد المجيد", "section_name": "3تر (هـ ك)"},
+    {"fullname": "مصالح محمد صهيب", "section_name": "3تر (هـ ك)"},
     {"fullname": "نجادي امينة نور الهدى", "section_name": "3تر (هـ ك)"},
-    {"fullname": "بلعباس لينة", "section_name": "3تر (هـ م)"}, {"fullname": "بلميلود أمال", "section_name": "3تر (هـ م)"},
-    {"fullname": "بلهاشمي مصطفى", "section_name": "3تر (هـ م)"}, {"fullname": "بن زينب يوسف", "section_name": "3تر (هـ م)"},
-    {"fullname": "بوترعة اية الرحمان", "section_name": "3تر (هـ م)"}, {"fullname": "حسين عبد الغنى", "section_name": "3تر (هـ م)"},
-    {"fullname": "خليفة هديل", "section_name": "3تر (هـ م)"}, {"fullname": "دلهوم عبد الكريم", "section_name": "3تر (هـ م)"},
-    {"fullname": "ديهاج محمد", "section_name": "3تر (هـ م)"}, {"fullname": "ربوحى بن بربار حبيب", "section_name": "3تر (هـ م)"},
-    {"fullname": "روام سريك شيماء", "section_name": "3تر (هـ م)"}, {"fullname": "سيد احمد أية نهاد", "section_name": "3تر (هـ م)"},
-    {"fullname": "صابر محمد آمين", "section_name": "3تر (هـ م)"}, {"fullname": "غوال رميساء", "section_name": "3تر (هـ م)"},
+    {"fullname": "بلعباس لينة", "section_name": "3تر (هـ م)"},
+    {"fullname": "بلميلود أمال", "section_name": "3تر (هـ م)"},
+    {"fullname": "بلهاشمي مصطفى", "section_name": "3تر (هـ م)"},
+    {"fullname": "بن زينب يوسف", "section_name": "3تر (هـ م)"},
+    {"fullname": "بوترعة اية الرحمان", "section_name": "3تر (هـ م)"},
+    {"fullname": "حسين عبد الغنى", "section_name": "3تر (هـ م)"},
+    {"fullname": "خليفة هديل", "section_name": "3تر (هـ م)"},
+    {"fullname": "دلهوم عبد الكريم", "section_name": "3تر (هـ م)"},
+    {"fullname": "ديهاج محمد", "section_name": "3تر (هـ م)"},
+    {"fullname": "ربوحى بن بربار حبيب", "section_name": "3تر (هـ م)"},
+    {"fullname": "روام سريك شيماء", "section_name": "3تر (هـ م)"},
+    {"fullname": "سيد احمد أية نهاد", "section_name": "3تر (هـ م)"},
+    {"fullname": "صابر محمد آمين", "section_name": "3تر (هـ م)"},
+    {"fullname": "غوال رميساء", "section_name": "3تر (هـ م)"},
     {"fullname": "لزرق هبة", "section_name": "3تر (هـ م)"},
 ]
 
@@ -612,47 +530,14 @@ def ensure_schema_columns():
             if "hours" not in cols:
                 _add_column_if_missing(conn, "lesson_log", "hours", "FLOAT DEFAULT 1.0")
             if "approval_status" not in cols:
-                _add_column_if_missing(conn, "lesson_log", "approval_status", "VARCHAR(20) DEFAULT 'approved'")
+                _add_column_if_missing(conn, "lesson_log", "approval_status", "VARCHAR(20) DEFAULT 'pending'")
             if "approved_by" not in cols:
                 _add_column_if_missing(conn, "lesson_log", "approved_by", "VARCHAR(120)")
-
-
-def _ensure_extra_tables():
-    is_pg = db.engine.dialect.name == "postgresql"
-    pk_col = "SERIAL PRIMARY KEY" if is_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
-    with db.engine.begin() as conn:
-        conn.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS teacher_attendance (
-                id {pk_col},
-                teacher_username VARCHAR(80),
-                teacher_name VARCHAR(120),
-                section_name VARCHAR(100),
-                date VARCHAR(50),
-                hours FLOAT DEFAULT 1.0,
-                recorded_by VARCHAR(120)
-            )
-        """))
-        conn.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS counselor_director_report (
-                id {pk_col},
-                counselor_username VARCHAR(80),
-                counselor_name VARCHAR(120),
-                created_at VARCHAR(50),
-                total_student_absences INTEGER DEFAULT 0,
-                total_student_absent_hours FLOAT DEFAULT 0.0,
-                total_teacher_absences INTEGER DEFAULT 0,
-                total_teacher_absent_hours FLOAT DEFAULT 0.0,
-                counselor_members_count INTEGER DEFAULT 0,
-                report_summary TEXT,
-                sent_to_director BOOLEAN DEFAULT TRUE
-            )
-        """))
 
 
 def init_database():
     db.create_all()
     ensure_schema_columns()
-    _ensure_extra_tables()
 
     if not User.query.first():
         db.session.add_all([
@@ -690,11 +575,11 @@ def login_required(f):
 
 
 def redirect_by_role(role):
-    if role in TEACHER_ROLES:
+    if role == "teacher":
         return redirect(url_for("teacher_dashboard_view"))
-    if role in COUNSELOR_ROLES:
+    if role == "counselor":
         return redirect(url_for("counselor_dashboard_view"))
-    if role in DIRECTOR_ROLES:
+    if role == "director":
         return redirect(url_for("director_dashboard_view"))
     if role == "inspector_deputy":
         return redirect(url_for("deputy_dashboard_view"))
@@ -714,106 +599,88 @@ def get_declared_teachers():
     return [t for t in teachers if t.weekly_hours is not None and float(t.weekly_hours) > 0]
 
 
-def _parse_date_safe(date_str):
-    if not date_str:
-        return None
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(str(date_str).strip()[:10], fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _is_in_current_week(date_str):
-    dt = _parse_date_safe(date_str)
-    if not dt:
-        return False
-    now = datetime.now()
-    start_of_week = (now - timedelta(days=now.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    end_of_week = start_of_week + timedelta(days=7)
-    return start_of_week <= dt < end_of_week
-
-
-def _get_teacher_absences_rows():
-    _ensure_extra_tables()
-    rows = db.session.execute(
-        text(
-            "SELECT id, teacher_username, teacher_name, section_name, date, hours, recorded_by "
-            "FROM teacher_attendance ORDER BY id DESC"
-        )
-    ).fetchall()
-    return [
-        {
-            "id": r[0],
-            "teacher_username": r[1] or "",
-            "teacher_name": r[2] or "أستاذ غير محدد",
-            "section_name": r[3] or "",
-            "date": r[4] or "",
-            "hours": float(r[5] or 1.0),
-            "recorded_by": r[6] or "",
-        }
-        for r in rows
-    ]
-
-
-def _get_teacher_weekly_absence_hours(teacher_uname, teacher_fullname, assigned_sections):
-    t_rows = _get_teacher_absences_rows()
-    weekly_teacher_hrs = sum(
-        r["hours"]
-        for r in t_rows
-        if (
-            (teacher_uname and r["teacher_username"] == teacher_uname)
-            or (teacher_fullname and r["teacher_name"] == teacher_fullname)
-        )
-        and _is_in_current_week(r["date"])
-    )
-
-    student_atts = Attendance.query.filter_by(teacher_username=teacher_uname).all()
-    if not student_atts and assigned_sections:
-        student_atts = Attendance.query.filter(Attendance.section_name.in_(assigned_sections)).all()
-
-    weekly_student_hrs = sum(
-        float(a.hours or 1.0)
-        for a in student_atts
-        if _is_in_current_week(a.date)
-    )
-
-    return weekly_teacher_hrs, weekly_student_hrs
-
-
 # ==============================================================================
-# واجهات HTML للمصادقة والتسجيل والاستعادة
+# واجهة موحّدة (Bootstrap 5 RTL + خط Cairo + ترويسة المؤسسة)
 # ==============================================================================
 
-LOGIN_TEMPLATE = """
+ALIGNED_SHELL = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>تسجيل الدخول - ثانوية الشهيد قوديد أحمد</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>body { font-family: 'Cairo', sans-serif; }</style>
+    <title>{{ page_title }} - ثانوية الشهيد قوديد أحمد</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Cairo', sans-serif; background-color: #f4f7f6; }
+        @media print { .no-print { display: none !important; } }
+        .official-header {
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #ffffff;
+            background: linear-gradient(135deg, #0d3b66, #1d6fa5);
+            padding: 20px 15px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.06); }
+    </style>
 </head>
-<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
-    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
-        <div class="mb-4 p-2.5 rounded-lg text-[11px] font-bold text-center border {% if is_persistent_db %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-amber-50 text-amber-800 border-amber-300{% endif %}">
+<body class="bg-light d-flex flex-column min-vh-100">
+    <div class="official-header">
+        <div style="font-size: 13px; opacity: 0.92;">الجمهورية الجزائرية الديمقراطية الشعبية</div>
+        <div style="font-size: 13px; opacity: 0.92;" class="my-1">وزارة التربية الوطنية - مديرية التربية لولاية وهران</div>
+        <div style="font-size: 19px; color: #ffca3a;" class="fw-bold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي (منصة التسيير)</div>
+    </div>
+
+    <div class="container py-2 flex-grow-1">
+        {% if db_mode_label %}
+        <div class="alert {% if is_persistent_db %}alert-success{% else %}alert-warning{% endif %} py-2 small text-center fw-bold no-print">
             {{ db_mode_label }}
         </div>
-        <div class="text-center mb-6">
-            <h1 class="text-xl font-bold text-gray-800">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</h1>
-            <p class="text-sm text-blue-600 font-semibold mt-1">منصة تسيير المؤسسة التربوية</p>
-        </div>
+        {% endif %}
 
-        {% with messages = get_flashed_messages(with_categories=True) %}
+        {% if session.get('username') %}
+        <div class="card p-3 shadow-sm mb-4 bg-white no-print">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div class="small fw-bold text-secondary">
+                    <i class="fas fa-user-check text-success me-1"></i>
+                    {{ session.get('fullname') }}
+                    <span class="badge bg-primary ms-1">{{ session.get('role') }}</span>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                    {% if session.get('role') == 'teacher' %}
+                        <a href="{{ url_for('teacher_dashboard_view', section=selected_section or '') }}" class="btn btn-outline-success btn-sm fw-bold">
+                            <i class="fas fa-chalkboard me-1"></i> الأقسام والغيابات ودفتر النصوص
+                        </a>
+                    {% elif session.get('role') == 'counselor' %}
+                        <a href="{{ url_for('counselor_dashboard_view') }}" class="btn btn-outline-warning text-dark btn-sm fw-bold">
+                            <i class="fas fa-user-shield me-1"></i> مكتب الاستشارة والغيابات
+                        </a>
+                    {% elif session.get('role') == 'inspector_deputy' %}
+                        <a href="{{ url_for('deputy_dashboard_view') }}" class="btn btn-outline-primary btn-sm fw-bold">
+                            <i class="fas fa-book-open me-1"></i> التنسيق البيداغوجي
+                        </a>
+                    {% elif session.get('role') == 'director' %}
+                        <a href="{{ url_for('director_dashboard_view') }}" class="btn btn-outline-primary btn-sm fw-bold">
+                            <i class="fas fa-tachometer-alt me-1"></i> لوحة القيادة
+                        </a>
+                    {% endif %}
+                    <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm fw-bold">
+                        <i class="fas fa-sign-out-alt me-1"></i> تسجيل الخروج
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
-            <div class="space-y-2 mb-4">
+            <div class="mb-3 no-print">
               {% for category, message in messages %}
-                <div class="p-3 rounded-lg text-xs font-bold text-center border {% if category == 'success' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-red-50 text-red-700 border-red-200{% endif %}">
+                <div class="alert {% if category == 'success' %}alert-success{% else %}alert-danger{% endif %} py-2 small fw-bold text-center mb-2">
                   {{ message }}
                 </div>
               {% endfor %}
@@ -822,192 +689,167 @@ LOGIN_TEMPLATE = """
         {% endwith %}
 
         {% if message %}
-        <div class="mb-4 p-3 bg-red-50 text-red-700 text-xs rounded-lg text-center font-bold border border-red-200">
-            {{ message }}
-        </div>
+        <div class="alert alert-danger py-2 small fw-bold text-center no-print">{{ message }}</div>
         {% endif %}
 
-        <form action="/login" method="POST" class="space-y-4">
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
-                <input type="text" name="username" placeholder="مثال: teacher" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
-                <input type="password" name="password" placeholder="••••••••" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية (الدور)</label>
-                <select name="role" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none">
-                    <option value="" disabled selected>-- اختر صفتك في المؤسسة --</option>
-                    <option value="director">المدير</option>
-                    <option value="inspector_deputy">الناظر</option>
-                    <option value="counselor">مستشار التربية</option>
-                    <option value="teacher">أستاذ</option>
-                </select>
-            </div>
-            <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 rounded-lg shadow-lg transition">
-                دخول إلى لوحة التحكم
-            </button>
-        </form>
-
-        <div class="mt-4 pt-3 border-t flex justify-between items-center text-xs font-semibold">
-            <a href="{{ url_for('register_account') }}" class="text-blue-700 hover:underline">تسجيل حساب جديد</a>
-            <a href="{{ url_for('recover_account') }}" class="text-amber-700 hover:underline">استعادة الحساب</a>
-        </div>
+        {{ body_content|safe }}
     </div>
+
+    <footer class="text-center py-3 bg-dark text-white mt-auto no-print">
+        <p class="mb-0 small">منصة تسيير المؤسسة &copy; 2026 - ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
+        <p class="mb-0 fw-bold text-warning small mt-1">جميع الحقوق محفوظة &copy; للأستاذ فغلو عبد الله آل بن علي السنوسي</p>
+    </footer>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
 
-REGISTER_PAGE_HTML = """
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>تسجيل حساب جديد - ثانوية الشهيد قوديد أحمد</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>body { font-family: 'Cairo', sans-serif; }</style>
-</head>
-<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
-    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-2xl p-8 border border-white/20">
-        <div class="text-center mb-6">
-            <h1 class="text-xl font-bold text-gray-800">إنشاء حساب جديد</h1>
-            <p class="text-xs text-blue-600 font-semibold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
-        </div>
-
-        {% with messages = get_flashed_messages(with_categories=True) %}
-          {% if messages %}
-            <div class="space-y-2 mb-4">
-              {% for category, message in messages %}
-                <div class="p-3 rounded-lg text-xs font-bold text-center border {% if category == 'success' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-red-50 text-red-700 border-red-200{% endif %}">
-                  {{ message }}
+LOGIN_BODY = """
+<div class="row justify-content-center mt-2">
+    <div class="col-md-6 col-lg-5">
+        <div class="card p-4 bg-white">
+            <h5 class="fw-bold text-center text-primary mb-3"><i class="fas fa-sign-in-alt me-1"></i> تسجيل الدخول</h5>
+            <form action="/login" method="POST">
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">اسم المستخدم</label>
+                    <input type="text" name="username" placeholder="مثال: teacher" required class="form-control form-control-sm">
                 </div>
-              {% endfor %}
-            </div>
-          {% endif %}
-        {% endwith %}
-
-        <form method="POST" action="{{ url_for('register_account') }}" class="space-y-4">
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">الاسم الكامل</label>
-                <input type="text" name="fullname" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم</label>
-                <input type="text" name="username" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">الصفة التربوية (الدور)</label>
-                <select name="role" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 bg-white focus:ring-2 focus:ring-blue-600 focus:outline-none">
-                    <option value="teacher">أستاذ</option>
-                    <option value="counselor">مستشار التربية</option>
-                    <option value="inspector_deputy">الناظر</option>
-                    <option value="director">المدير</option>
-                </select>
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">الساعات الفعلية الأسبوعية (اختياري للأستاذ — يُحدَّد لاحقاً من لوحة الأستاذ)</label>
-                <input type="number" step="0.5" min="1" max="50" name="weekly_hours" placeholder="مثال: 13 أو 16" class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور</label>
-                <input type="password" name="password" required minlength="4" class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">الأقسام المسندة (اختياري)</label>
-                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-52 overflow-y-auto p-3 bg-gray-50 rounded-lg border border-gray-200">
-                    {% for section in sections %}
-                        <label class="flex items-center gap-2 text-xs font-semibold text-gray-700 bg-white px-2.5 py-1.5 rounded border border-gray-200 cursor-pointer hover:bg-blue-50">
-                            <input type="checkbox" name="sections" value="{{ section }}" class="rounded text-blue-600 focus:ring-blue-500">
-                            <span>{{ section }}</span>
-                        </label>
-                    {% endfor %}
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">كلمة المرور</label>
+                    <input type="password" name="password" placeholder="••••••••" required class="form-control form-control-sm">
                 </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">الصفة التربوية (الدور)</label>
+                    <select name="role" required class="form-select form-select-sm">
+                        <option value="" disabled selected>-- اختر صفتك في المؤسسة --</option>
+                        <option value="director">المدير</option>
+                        <option value="inspector_deputy">الناظر</option>
+                        <option value="counselor">مستشار التربية</option>
+                        <option value="teacher">أستاذ</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-success btn-sm w-100 fw-bold py-2">
+                    دخول إلى لوحة التحكم
+                </button>
+            </form>
+            <hr class="my-3">
+            <div class="d-flex justify-content-between small fw-bold">
+                <a href="{{ url_for('register_account') }}" class="text-primary text-decoration-none">تسجيل حساب جديد</a>
+                <a href="{{ url_for('recover_account') }}" class="text-warning text-dark text-decoration-none">استعادة الحساب</a>
             </div>
-            <button type="submit" class="w-full bg-blue-700 hover:bg-blue-800 text-white font-bold py-3 rounded-lg shadow-lg transition">
-                تسجيل الحساب
-            </button>
-        </form>
-
-        <div class="mt-5 pt-4 border-t flex justify-between items-center text-xs font-semibold">
-            <a href="{{ url_for('home') }}" class="text-blue-700 hover:underline">العودة لتسجيل الدخول</a>
-            <a href="{{ url_for('recover_account') }}" class="text-amber-700 hover:underline">استعادة الحساب</a>
         </div>
     </div>
-</body>
-</html>
+</div>
 """
 
-RECOVER_PAGE_HTML = """
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>استعادة الحساب - ثانوية الشهيد قوديد أحمد</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>body { font-family: 'Cairo', sans-serif; }</style>
-</head>
-<body class="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
-    <div class="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl w-full max-w-md p-8 border border-white/20">
-        <div class="text-center mb-6">
-            <h1 class="text-xl font-bold text-gray-800">استعادة الحساب وتعيين كلمة مرور جديدة</h1>
-            <p class="text-xs text-blue-600 font-semibold mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
-        </div>
-
-        {% with messages = get_flashed_messages(with_categories=True) %}
-          {% if messages %}
-            <div class="space-y-2 mb-4">
-              {% for category, message in messages %}
-                <div class="p-3 rounded-lg text-xs font-bold text-center border {% if category == 'success' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-red-50 text-red-700 border-red-200{% endif %}">
-                  {{ message }}
+REGISTER_BODY = """
+<div class="row justify-content-center mt-2">
+    <div class="col-md-8 col-lg-7">
+        <div class="card p-4 bg-white">
+            <h5 class="fw-bold text-center text-primary mb-3"><i class="fas fa-user-plus me-1"></i> إنشاء حساب جديد</h5>
+            <form method="POST" action="{{ url_for('register_account') }}">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">الاسم الكامل</label>
+                        <input type="text" name="fullname" required class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">اسم المستخدم</label>
+                        <input type="text" name="username" required class="form-control form-control-sm">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">الصفة التربوية (الدور)</label>
+                        <select name="role" required class="form-select form-select-sm">
+                            <option value="teacher">أستاذ</option>
+                            <option value="counselor">مستشار التربية</option>
+                            <option value="inspector_deputy">الناظر</option>
+                            <option value="director">المدير</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-bold">الحجم الساعي الفعلي الأسبوعي (اختياري)</label>
+                        <input type="number" step="0.5" min="1" max="50" name="weekly_hours" placeholder="مثال: 13" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-bold">كلمة المرور</label>
+                        <input type="password" name="password" required minlength="4" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-bold">الأقسام المسندة (اختياري)</label>
+                        <div class="row g-2 p-2 bg-light rounded border" style="max-height: 190px; overflow-y: auto;">
+                            {% for section in sections %}
+                            <div class="col-6 col-sm-4">
+                                <label class="form-check bg-white p-1.5 px-2 rounded border small fw-bold mb-0">
+                                    <input type="checkbox" name="sections" value="{{ section }}" class="form-check-input ms-1">
+                                    <span class="me-3">{{ section }}</span>
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-primary btn-sm w-100 fw-bold py-2">تسجيل الحساب</button>
+                    </div>
                 </div>
-              {% endfor %}
+            </form>
+            <hr class="my-3">
+            <div class="d-flex justify-content-between small fw-bold">
+                <a href="{{ url_for('home') }}" class="text-primary text-decoration-none">العودة لتسجيل الدخول</a>
+                <a href="{{ url_for('recover_account') }}" class="text-warning text-dark text-decoration-none">استعادة الحساب</a>
             </div>
-          {% endif %}
-        {% endwith %}
-
-        <form method="POST" action="{{ url_for('recover_account') }}" class="space-y-4">
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم المسجل</label>
-                <input type="text" name="username" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">الاسم الكامل المطابق للحساب</label>
-                <input type="text" name="fullname" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور الجديدة</label>
-                <input type="password" name="new_password" required minlength="4" class="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-600 focus:outline-none">
-            </div>
-            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg shadow-lg transition">
-                تحديث كلمة المرور
-            </button>
-        </form>
-
-        <div class="mt-5 pt-4 border-t flex justify-between items-center text-xs font-semibold">
-            <a href="{{ url_for('home') }}" class="text-blue-700 hover:underline">العودة لتسجيل الدخول</a>
-            <a href="{{ url_for('register_account') }}" class="text-indigo-700 hover:underline">إنشاء حساب جديد</a>
         </div>
     </div>
-</body>
-</html>
+</div>
 """
+
+RECOVER_BODY = """
+<div class="row justify-content-center mt-2">
+    <div class="col-md-6 col-lg-5">
+        <div class="card p-4 bg-white">
+            <h5 class="fw-bold text-center text-primary mb-3"><i class="fas fa-key me-1"></i> استعادة الحساب وتعيين كلمة مرور جديدة</h5>
+            <form method="POST" action="{{ url_for('recover_account') }}">
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">اسم المستخدم المسجل</label>
+                    <input type="text" name="username" required class="form-control form-control-sm">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">الاسم الكامل المطابق للحساب</label>
+                    <input type="text" name="fullname" required class="form-control form-control-sm">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small fw-bold">كلمة المرور الجديدة</label>
+                    <input type="password" name="new_password" required minlength="4" class="form-control form-control-sm">
+                </div>
+                <button type="submit" class="btn btn-success btn-sm w-100 fw-bold py-2">تحديث كلمة المرور</button>
+            </form>
+            <hr class="my-3">
+            <div class="d-flex justify-content-between small fw-bold">
+                <a href="{{ url_for('home') }}" class="text-primary text-decoration-none">العودة لتسجيل الدخول</a>
+                <a href="{{ url_for('register_account') }}" class="text-secondary text-decoration-none">إنشاء حساب جديد</a>
+            </div>
+        </div>
+    </div>
+</div>
+"""
+
+
+def render_aligned(page_title, body_content, message=None, selected_section=""):
+    return render_template_string(
+        ALIGNED_SHELL,
+        page_title=page_title,
+        body_content=body_content,
+        message=message,
+        selected_section=selected_section,
+        db_mode_label=DB_MODE_LABEL,
+        is_persistent_db=IS_PERSISTENT_DB,
+    )
 
 
 @app.route("/")
 def home():
     if "username" in session and "role" in session:
         return redirect_by_role(session.get("role"))
-    return render_template_string(
-        LOGIN_TEMPLATE,
-        db_mode_label=DB_MODE_LABEL,
-        is_persistent_db=IS_PERSISTENT_DB,
-    )
+    return render_aligned("تسجيل الدخول", LOGIN_BODY)
 
 
 @app.route("/login", methods=["POST"])
@@ -1018,12 +860,7 @@ def login():
 
     user = User.query.filter_by(username=username).first()
     if not user or not user.verify_password(password) or user.role != role:
-        return render_template_string(
-            LOGIN_TEMPLATE,
-            message="بيانات الدخول غير صحيحة!",
-            db_mode_label=DB_MODE_LABEL,
-            is_persistent_db=IS_PERSISTENT_DB,
-        )
+        return render_aligned("تسجيل الدخول", LOGIN_BODY, message="بيانات الدخول غير صحيحة!")
 
     session["username"] = user.username
     session["fullname"] = user.fullname
@@ -1089,17 +926,15 @@ def register_account():
                     )
 
             db.session.commit()
-            flash(
-                f"تم إنشاء الحساب ({username}) وحفظه بنجاح. يمكنك الآن تسجيل الدخول.",
-                "success",
-            )
+            flash(f"تم إنشاء الحساب ({username}) وحفظه بنجاح. يمكنك الآن تسجيل الدخول.", "success")
         except Exception as e:
             db.session.rollback()
             flash(f"تعذر حفظ الحساب في قاعدة البيانات: {e}", "danger")
 
         return redirect(url_for("register_account"))
 
-    return render_template_string(REGISTER_PAGE_HTML, sections=OFFICIAL_SECTIONS)
+    rendered = render_template_string(REGISTER_BODY, sections=OFFICIAL_SECTIONS)
+    return render_aligned("تسجيل حساب جديد", rendered)
 
 
 @app.route("/recover-account", methods=["GET", "POST"], endpoint="recover_account")
@@ -1110,40 +945,30 @@ def recover_account():
         new_password = request.form.get("new_password") or ""
 
         if not username or not fullname or not new_password:
-            flash(
-                "يرجى إدخال اسم المستخدم، الاسم الكامل، وكلمة المرور الجديدة.",
-                "danger",
-            )
+            flash("يرجى إدخال اسم المستخدم، الاسم الكامل، وكلمة المرور الجديدة.", "danger")
             return redirect(url_for("recover_account"))
 
         user = User.query.filter_by(username=username, fullname=fullname).first()
         if not user:
-            flash(
-                "لم يتم العثور على حساب مطابق لاسم المستخدم والاسم الكامل المدخلين.",
-                "danger",
-            )
+            flash("لم يتم العثور على حساب مطابق لاسم المستخدم والاسم الكامل المدخلين.", "danger")
             return redirect(url_for("recover_account"))
 
         user.password = new_password
         db.session.commit()
-
-        flash(
-            "تم تحديث كلمة المرور بنجاح. يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة.",
-            "success",
-        )
+        flash("تم تحديث كلمة المرور بنجاح. يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة.", "success")
         return redirect(url_for("recover_account"))
 
-    return render_template_string(RECOVER_PAGE_HTML)
+    return render_aligned("استعادة الحساب", RECOVER_BODY)
 
 
 # ==============================================================================
-# مسارات الأستاذ (الساعات الفعلية + الأقسام + الغيابات + دفتر النصوص)
+# مسارات الأستاذ المساعدة (الساعات، الأقسام، التلاميذ، والغيابات)
 # ==============================================================================
 
 @app.route("/teacher/set-hours", methods=["POST"])
 @login_required
 def set_teacher_hours():
-    if session.get("role") not in TEACHER_ROLES:
+    if session.get("role") != "teacher":
         return redirect(url_for("home"))
     raw_hours = (request.form.get("weekly_hours") or "").strip()
     try:
@@ -1154,16 +979,16 @@ def set_teacher_hours():
         if user:
             user.weekly_hours = val
             db.session.commit()
-            flash("تم حفظ الساعات الفعلية بنجاح.", "success")
+            flash("تم حفظ الحجم الساعي بنجاح.", "success")
     except ValueError:
-        flash("يرجى إدخال عدد ساعات صحيح موجب.", "danger")
+        flash("يرجى إدخال حجم ساعي صحيح أكبر من الصفر.", "danger")
     return redirect(url_for("teacher_dashboard_view"))
 
 
 @app.route("/teacher/add-section", methods=["POST"])
 @login_required
 def add_section():
-    if session.get("role") not in TEACHER_ROLES:
+    if session.get("role") != "teacher":
         return redirect(url_for("home"))
     sec = request.form.get("section_name")
     uname = session.get("username")
@@ -1175,14 +1000,14 @@ def add_section():
         if user and sec not in user.sections:
             user.sections = user.sections + [sec]
         db.session.commit()
-        flash(f"تمت إضافة القسم {sec} إلى أقسامك.", "success")
+        flash(f"تمت إضافة القسم ({sec}) إلى أقسامك.", "success")
     return redirect(url_for("teacher_dashboard_view", section=sec))
 
 
 @app.route("/teacher/remove-section/<int:sid>")
 @login_required
 def remove_section(sid):
-    if session.get("role") not in TEACHER_ROLES:
+    if session.get("role") != "teacher":
         return redirect(url_for("home"))
     ts = TeacherSection.query.get(sid)
     if ts and ts.teacher_username == session.get("username"):
@@ -1192,60 +1017,239 @@ def remove_section(sid):
         if user and sec_name in user.sections:
             user.sections = [s for s in user.sections if s != sec_name]
         db.session.commit()
-        flash(f"تم حذف القسم {sec_name} من أقسامك.", "success")
+        flash(f"تم حذف القسم ({sec_name}) من قائمتك.", "success")
     return redirect(url_for("teacher_dashboard_view"))
 
 
-@app.route("/teacher/mark-absence", methods=["POST"])
+@app.route("/teacher/add-student", methods=["POST"])
 @login_required
-def mark_absence():
-    if session.get("role") not in TEACHER_ROLES:
+def add_student():
+    if session.get("role") != "teacher":
         return redirect(url_for("home"))
-
-    student_name = (request.form.get("student_name") or "").strip()
+    fullname = (request.form.get("student_fullname") or "").strip()
     section_name = (request.form.get("section_name") or "").strip()
-    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
-    selected_section = (request.form.get("selected_section") or section_name).strip()
-
-    try:
-        hours_val = float(request.form.get("hours") or 1.0)
-        if hours_val <= 0:
-            hours_val = 1.0
-    except ValueError:
-        hours_val = 1.0
-
-    if student_name and section_name and date:
-        existing = Attendance.query.filter_by(
-            student_name=student_name, section_name=section_name, date=date
-        ).first()
-        if not existing:
-            db.session.add(
-                Attendance(
-                    student_name=student_name,
-                    section_name=section_name,
-                    teacher_username=session.get("username"),
-                    teacher_name=session.get("fullname"),
-                    date=date,
-                    status="غائب",
-                    hours=hours_val,
-                    approval_status="approved",
-                    approved_by="مرفوع للحارس العام (أرشيف سنوي)",
-                )
+    if fullname and section_name:
+        db.session.add(
+            Student(
+                fullname=fullname,
+                section_name=section_name,
+                teacher_username=session.get("username"),
             )
-            db.session.commit()
-            flash(
-                f"تم تسجيل غياب ({student_name}) في القسم {section_name} وحفظه في الأرشيف السنوي ورفعه للحارس العام.",
-                "success",
-            )
-        else:
-            flash("غياب هذا التلميذ مسجل مسبقاً في هذا التاريخ والقسم.", "danger")
-
-    return redirect(url_for("teacher_dashboard_view", section=selected_section))
+        )
+        db.session.commit()
+        flash(f"تمت إضافة التلميذ ({fullname}) إلى قسم {section_name}.", "success")
+    return redirect(url_for("teacher_dashboard_view", section=section_name))
 
 
-@app.route("/teacher/submit-lesson", methods=["POST"])
+# ==============================================================================
+# مسارات الحارس العام المساعدة (اعتماد/رفض الحصص والغيابات)
+# ==============================================================================
+
+@app.route("/counselor/approve-lesson/<int:lid>", methods=["POST"])
 @login_required
-def submit_lesson():
+def approve_lesson(lid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    lesson = LessonLog.query.get(lid)
+    if lesson:
+        try:
+            hrs = float(request.form.get("hours") or lesson.hours or 1.0)
+            if hrs > 0:
+                lesson.hours = hrs
+        except ValueError:
+            pass
+        lesson.approval_status = "approved"
+        lesson.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+@app.route("/counselor/reject-lesson/<int:lid>", methods=["POST"])
+@login_required
+def reject_lesson(lid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    lesson = LessonLog.query.get(lid)
+    if lesson:
+        lesson.approval_status = "rejected"
+        lesson.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+@app.route("/counselor/approve-attendance/<int:aid>", methods=["POST"])
+@login_required
+def approve_attendance(aid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    att = Attendance.query.get(aid)
+    if att:
+        try:
+            hrs = float(request.form.get("hours") or att.hours or 1.0)
+            if hrs > 0:
+                att.hours = hrs
+        except ValueError:
+            pass
+        att.approval_status = "approved"
+        att.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+@app.route("/counselor/reject-attendance/<int:aid>", methods=["POST"])
+@login_required
+def reject_attendance(aid):
+    if session.get("role") != "counselor":
+        return redirect(url_for("home"))
+    att = Attendance.query.get(aid)
+    if att:
+        att.approval_status = "rejected"
+        att.approved_by = session.get("fullname")
+        db.session.commit()
+    return redirect(url_for("counselor_dashboard_view"))
+
+
+# ==============================================================================
+# لوحة السيد الناظر
+# ==============================================================================
+
+@app.route("/deputy/dashboard-view")
+@login_required
+def deputy_dashboard_view():
+    if session.get("role") != "inspector_deputy":
+        return redirect(url_for("home"))
+    approved_logs = LessonLog.query.filter_by(approval_status="approved").all()
+    total_hrs = sum(float(l.hours or 0) for l in approved_logs)
+    rows = "".join([
+        (
+            "<tr>"
+            f"<td>{l.teacher_name}</td>"
+            f"<td>{l.section_name}</td>"
+            f"<td class='fw-bold'>{l.lesson_title}</td>"
+            f"<td>{l.content}</td>"
+            f"<td class='fw-bold text-primary'>{format_hours(l.hours)} سا</td>"
+            f"<td>{l.date}</td>"
+            "</tr>"
+        )
+        for l in approved_logs
+    ]) or "<tr><td colspan='6' class='text-center py-4 text-muted'>لا توجد دروس معتمدة بعد.</td></tr>"
+
+    body = f"""
+    <div class="card p-4 bg-white mb-4 border-end border-4 border-primary">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h5 class="fw-bold text-primary mb-1"><i class="fas fa-book-open me-1"></i> التنسيق البيداغوجي - السيد الناظر</h5>
+                <div class="small text-muted">ثانوية الشهيد قوديد أحمد | إجمالي الساعات المعتمدة: <b>{format_hours(total_hrs)} سا</b></div>
+            </div>
+        </div>
+    </div>
+    <div class="card p-4 bg-white">
+        <h6 class="fw-bold text-dark mb-3">متابعة دفاتر النصوص المعتمدة</h6>
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped text-center align-middle small">
+                <thead class="table-primary">
+                    <tr><th>الأستاذ</th><th>القسم</th><th>الدرس</th><th>المحتوى</th><th>الساعات</th><th>التاريخ</th></tr>
+                </thead>
+                <tbody>{rows}</tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return render_aligned("التنسيق البيداغوجي - الناظر", body)
+
+
+# ==============================================================================
+# التسيير المباشر: الأقسام والغيابات + دفتر النصوص + الاستشارة والمدير
+# ==============================================================================
+
+COUNSELOR_ROLES = ("counselor", "advisor", "guidance_counselor")
+DIRECTOR_ROLES = ("director", "principal")
+TEACHER_ROLES = ("teacher",)
+
+
+def _mod_bind_view(rule, endpoint_name, view_func, **options):
+    app.view_functions[endpoint_name] = view_func
+    existing_rule = None
+    for r in app.url_map.iter_rules():
+        if r.rule == rule:
+            existing_rule = r
+            break
+
+    if existing_rule is not None:
+        old_ep = existing_rule.endpoint
+        if old_ep != endpoint_name and old_ep in app.url_map._rules_by_endpoint:
+            app.url_map._rules_by_endpoint[old_ep] = [
+                r for r in app.url_map._rules_by_endpoint[old_ep] if r != existing_rule
+            ]
+        existing_rule.endpoint = endpoint_name
+        ep_rules = app.url_map._rules_by_endpoint.setdefault(endpoint_name, [])
+        if existing_rule not in ep_rules:
+            ep_rules.append(existing_rule)
+    else:
+        options["endpoint"] = endpoint_name
+        app.add_url_rule(rule, view_func=view_func, **options)
+
+    return view_func
+
+
+def _mod_ensure_report_table():
+    with db.engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS counselor_director_report (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                counselor_username VARCHAR(80),
+                counselor_name VARCHAR(120),
+                created_at VARCHAR(50),
+                total_student_absences INTEGER DEFAULT 0,
+                total_student_absent_hours FLOAT DEFAULT 0.0,
+                total_teacher_absences INTEGER DEFAULT 0,
+                total_teacher_absent_hours FLOAT DEFAULT 0.0,
+                counselor_members_count INTEGER DEFAULT 0,
+                report_summary TEXT,
+                sent_to_director BOOLEAN DEFAULT 1
+            )
+        """))
+
+
+with app.app_context():
+    _mod_ensure_report_table()
+
+
+def _mod_get_counselor_members():
+    return User.query.filter(User.role.in_(COUNSELOR_ROLES)).all()
+
+
+def _mod_get_teacher_absences_stats():
+    inspector = inspect(db.engine)
+    if "teacher_attendance" in inspector.get_table_names():
+        rows = db.session.execute(
+            text("SELECT teacher_name, hours FROM teacher_attendance")
+        ).fetchall()
+        count = len(rows)
+        hours = sum(float(r[1] or 0) for r in rows)
+        return count, hours, rows
+    return 0, 0.0, []
+
+
+def _mod_build_counselor_report_data():
+    student_absences = Attendance.query.all()
+    student_absence_count = len(student_absences)
+    student_absence_hours = sum(float(a.hours or 1.0) for a in student_absences)
+    teacher_absence_count, teacher_absence_hours, _ = _mod_get_teacher_absences_stats()
+    counselor_members = _mod_get_counselor_members()
+
+    return {
+        "student_absence_count": student_absence_count,
+        "student_absence_hours": student_absence_hours,
+        "teacher_absence_count": teacher_absence_count,
+        "teacher_absence_hours": teacher_absence_hours,
+        "counselor_members": counselor_members,
+        "counselor_members_count": len(counselor_members),
+    }
+
+
+@login_required
+def mod_submit_lesson():
     if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
 
@@ -1280,9 +1284,11 @@ def submit_lesson():
     return redirect(url_for("teacher_dashboard_view", section=sec))
 
 
-@app.route("/teacher/send-lesson-to-director/<int:lid>", methods=["POST"])
+_mod_bind_view("/teacher/submit-lesson", "submit_lesson", mod_submit_lesson, methods=["POST"])
+
+
 @login_required
-def send_lesson_to_director(lid):
+def mod_send_lesson_to_director(lid):
     if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
 
@@ -1295,36 +1301,90 @@ def send_lesson_to_director(lid):
     return redirect(url_for("teacher_dashboard_view", section=lesson.section_name if lesson else ""))
 
 
-@app.route("/teacher/dashboard-view")
+_mod_bind_view("/teacher/send-lesson-to-director/<int:lid>", "mod_send_lesson_to_director", mod_send_lesson_to_director, methods=["POST"])
+
+
 @login_required
-def teacher_dashboard_view():
+def mod_mark_absence():
+    if session.get("role") not in TEACHER_ROLES:
+        return redirect(url_for("home"))
+
+    student_name = (request.form.get("student_name") or "").strip()
+    section_name = (request.form.get("section_name") or "").strip()
+    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
+    selected_section = (request.form.get("selected_section") or section_name).strip()
+
+    try:
+        hours_val = float(request.form.get("hours") or 1.0)
+        if hours_val <= 0:
+            hours_val = 1.0
+    except ValueError:
+        hours_val = 1.0
+
+    if student_name and section_name and date:
+        existing = Attendance.query.filter_by(student_name=student_name, date=date).first()
+        if not existing:
+            db.session.add(
+                Attendance(
+                    student_name=student_name,
+                    section_name=section_name,
+                    teacher_username=session.get("username"),
+                    teacher_name=session.get("fullname"),
+                    date=date,
+                    status="غائب",
+                    hours=hours_val,
+                    approval_status="approved",
+                    approved_by="مسجل آنياً (أستاذ + حارس عام)",
+                )
+            )
+            db.session.commit()
+            flash("تم تسجيل الغياب في لوحتك ولوحة الحارس العام في الوقت نفسه.", "success")
+        else:
+            flash("غياب هذا التلميذ مسجل مسبقاً في هذا التاريخ.", "danger")
+
+    return redirect(url_for("teacher_dashboard_view", section=selected_section, att_date=date))
+
+
+_mod_bind_view("/teacher/mark-absence", "mark_absence", mod_mark_absence, methods=["POST"])
+
+
+@login_required
+def mod_teacher_dashboard_view():
     if session.get("role") not in TEACHER_ROLES:
         return redirect(url_for("home"))
 
     teacher_uname = session.get("username")
-    teacher_fullname = session.get("fullname") or ""
     teacher_user = User.query.filter_by(username=teacher_uname).first()
     today_date = datetime.now().strftime("%Y-%m-%d")
+    att_date = (request.args.get("att_date") or today_date).strip()
 
     assigned_sections = TeacherSection.query.filter_by(teacher_username=teacher_uname).all()
     assigned_section_names = [ts.section_name for ts in assigned_sections]
-    selected_section = request.args.get(
-        "section", assigned_section_names[0] if assigned_section_names else ""
-    )
-    archive_section_filter = (request.args.get("archive_section") or "").strip()
-
+    selected_section = request.args.get("section", assigned_section_names[0] if assigned_section_names else "")
     students_in_section = (
-        Student.query.filter_by(section_name=selected_section).all()
+        Student.query.filter_by(section_name=selected_section).order_by(Student.fullname.asc()).all()
         if selected_section
         else []
     )
 
+    absent_names_on_date = {
+        a.student_name
+        for a in Attendance.query.filter_by(section_name=selected_section, date=att_date).all()
+    } if selected_section else set()
+
+    students_sorted = sorted(
+        students_in_section,
+        key=lambda st: (0 if st.fullname in absent_names_on_date else 1, st.fullname),
+    )
+
+    section_tabs_html = "".join([
+        f'<a href="{url_for("teacher_dashboard_view", section=sec, att_date=att_date)}" '
+        f'class="btn btn-sm fw-bold {"btn-success" if sec == selected_section else "btn-outline-success"}">{sec}</a>'
+        for sec in assigned_section_names
+    ]) or '<span class="text-muted small">لا توجد أقسام مسندة بعد — أضف قسماً من القائمة أدناه.</span>'
+
     my_sections_options = "".join([
         f'<option value="{sec}" {"selected" if sec == selected_section else ""}>{sec}</option>'
-        for sec in assigned_section_names
-    ])
-    archive_filter_options = "".join([
-        f'<option value="{sec}" {"selected" if sec == archive_section_filter else ""}>{sec}</option>'
         for sec in assigned_section_names
     ])
     all_sections_options = "".join([
@@ -1341,277 +1401,226 @@ def teacher_dashboard_view():
     hours_display = f"{format_hours(declared_hours)} سا/أسبوع" if declared_hours is not None else "غير محدد بعد"
     hours_input_val = format_hours(declared_hours) if declared_hours is not None else ""
 
-    weekly_teacher_abs_hrs, weekly_student_abs_hrs = _get_teacher_weekly_absence_hours(
-        teacher_uname, teacher_fullname, assigned_section_names
-    )
-    total_weekly_absence_hrs = weekly_teacher_abs_hrs + weekly_student_abs_hrs
-
     my_lessons = LessonLog.query.filter_by(teacher_username=teacher_uname).all()
+    my_absences = Attendance.query.filter_by(teacher_username=teacher_uname).all()
     sent_to_director_count = sum(1 for l in my_lessons if l.approved_by == "مرسل للمدير")
     total_lesson_hours = sum(float(l.hours or 0) for l in my_lessons)
 
-    archive_query = Attendance.query.filter_by(teacher_username=teacher_uname)
-    if archive_section_filter:
-        archive_query = archive_query.filter_by(section_name=archive_section_filter)
-    yearly_absences = archive_query.order_by(Attendance.id.desc()).all()
-
-    flashes_html = "".join([
-        f"<div class='p-3 rounded-lg text-xs font-bold text-center border {'bg-emerald-50 text-emerald-700 border-emerald-200' if cat == 'success' else 'bg-red-50 text-red-700 border-red-200'}'>{msg}</div>"
-        for cat, msg in get_flashed_messages(with_categories=True)
-    ])
-
-    attendance_rows = "".join([f"""
-    <tr class="border-b hover:bg-gray-50">
-        <td class="py-2.5 px-3 text-sm font-semibold text-gray-800">{s.fullname}</td>
-        <td class="py-2.5 px-3 text-sm text-gray-600">{s.section_name}</td>
-        <td class="py-2.5 px-3 text-center">
-            <form action="/teacher/mark-absence" method="POST" class="inline-flex items-center gap-1.5">
-                <input type="hidden" name="student_name" value="{s.fullname}">
-                <input type="hidden" name="section_name" value="{s.section_name}">
-                <input type="hidden" name="date" value="{today_date}">
-                <input type="hidden" name="selected_section" value="{selected_section}">
-                <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" class="w-16 px-2 py-1 border rounded text-xs text-center font-bold">
-                <button type="submit" class="bg-red-50 text-red-600 border border-red-200 hover:bg-red-600 hover:text-white px-3 py-1 rounded text-xs font-bold transition">تسجيل غياب (أرشيف سنوي + حارس عام)</button>
-            </form>
-        </td>
-    </tr>
-    """ for s in students_in_section]) or "<tr><td colspan='3' class='text-center py-4 text-gray-400 text-xs'>اختر قسماً لعرض قائمة المناداة.</td></tr>"
-
-    yearly_archive_rows = "".join([f"""
-    <tr class="border-b hover:bg-gray-50 text-xs">
-        <td class="py-2.5 px-3 font-extrabold text-gray-900">{a.student_name}</td>
-        <td class="py-2.5 px-3 font-bold text-blue-800">{a.section_name}</td>
-        <td class="py-2.5 px-3 text-gray-700">{a.date}</td>
-        <td class="py-2.5 px-3 font-extrabold text-rose-700">{format_hours(a.hours)} سا</td>
-        <td class="py-2.5 px-3"><span class="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold">أرشيف سنوي</span></td>
-    </tr>
-    """ for a in yearly_absences]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد غيابات مسجلة في الأرشيف السنوي بعد.</td></tr>"
-
-    my_sections_list_html = "".join([f"""
-    <div class="flex justify-between items-center bg-gray-50 px-3 py-2 rounded-lg border text-xs">
-        <span class="font-bold text-blue-900">{ts.section_name}</span>
-        <a href="/teacher/remove-section/{ts.id}" class="text-red-600 hover:underline">حذف</a>
-    </div>
-    """ for ts in assigned_sections]) or "<p class='text-xs text-gray-400'>لم تضف أي قسم بعد.</p>"
-
-    lessons_rows = "".join([f"""
-    <tr class='border-b text-xs'>
-        <td class='py-2 px-3 font-bold'>{l.section_name}</td>
-        <td class='py-2 px-3'>{l.lesson_title}</td>
-        <td class='py-2 px-3 font-bold'>{format_hours(l.hours)} سا</td>
-        <td class='py-2 px-3'>{l.date}</td>
-        <td class='py-2 px-3'>
-            {"<span class='bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded font-bold'>مُرسلة للمدير</span>" if l.approved_by == "مرسل للمدير" else "<span class='bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-bold'>محفوظة عند الأستاذ</span>"}
-        </td>
-        <td class='py-2 px-3'>
-            {"<span class='text-emerald-700 font-bold'>تم الإرسال</span>" if l.approved_by == "مرسل للمدير" else f"<form action='/teacher/send-lesson-to-director/{l.id}' method='POST' class='inline'><button type='submit' class='bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded font-bold'>إرسال للمدير</button></form>"}
-        </td>
-    </tr>
-    """ for l in reversed(my_lessons)]) or "<tr><td colspan='6' class='text-center py-4 text-gray-400 text-xs'>لا توجد حصص مسجلة في دفتر النصوص بعد.</td></tr>"
-
-    return f"""
-    <html lang="ar" dir="rtl">
-    <head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
-    <body class="bg-slate-100 min-h-screen p-4 md:p-6">
-        <div class="max-w-6xl mx-auto space-y-6">
-            {f"<div class='space-y-2'>{flashes_html}</div>" if flashes_html else ""}
-
-            <div class="bg-white rounded-2xl shadow-md p-6 border-b-4 border-blue-800 space-y-4">
-                <div class="text-center space-y-1">
-                    <p class="text-xs font-bold text-gray-600">الجمهورية الجزائرية الديمقراطية الشعبية | وزارة التربية الوطنية</p>
-                    <h2 class="text-lg font-extrabold text-blue-900">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</h2>
-                </div>
-                <div class="pt-3 flex flex-wrap justify-between items-center border-t text-sm gap-2">
-                    <span class="font-bold text-gray-700">الأستاذ: {teacher_fullname} | التاريخ: {today_date}</span>
-                    <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-red-100">تسجيل الخروج</a>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
-                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-blue-700">الساعات الفعلية</div>
-                        <div class="text-base font-extrabold text-blue-950 mt-1">{hours_display}</div>
-                    </div>
-                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-rose-700">ساعات الغياب في الأسبوع</div>
-                        <div class="text-base font-extrabold text-rose-950 mt-1">{format_hours(total_weekly_absence_hrs)} سا/أسبوع</div>
-                        <div class="text-[10px] text-rose-600 mt-0.5">غياب الأستاذ: {format_hours(weekly_teacher_abs_hrs)} سا | التلاميذ: {format_hours(weekly_student_abs_hrs)} سا</div>
-                    </div>
-                    <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-emerald-700">ساعات حصص دفتر النصوص</div>
-                        <div class="text-base font-extrabold text-emerald-950 mt-1">{format_hours(total_lesson_hours)} سا</div>
-                    </div>
-                    <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-indigo-700">حصص مرسلة للمدير</div>
-                        <div class="text-base font-extrabold text-indigo-950 mt-1">{sent_to_director_count}</div>
-                    </div>
-                </div>
-
-                <form action="/teacher/set-hours" method="POST" class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3">
-                    <div class="text-xs font-bold text-slate-700">تحديد/تعديل الساعات الفعلية الأسبوعية (تظهر أمام لوحتك ولدى الحارس العام والمدير):</div>
-                    <div class="flex items-center gap-2">
-                        <input type="number" step="0.5" min="1" max="50" name="weekly_hours" value="{hours_input_val}" placeholder="مثال: 13" required class="w-28 px-3 py-1.5 border rounded-lg text-xs font-bold text-center bg-white">
-                        <button type="submit" class="bg-blue-700 hover:bg-blue-800 text-white font-bold px-4 py-1.5 rounded-lg text-xs transition">حفظ الساعات الفعلية</button>
-                    </div>
+    attendance_rows = "".join([
+        f"""
+        <tr class="{'table-danger fw-bold' if s.fullname in absent_names_on_date else ''}">
+            <td>{idx}</td>
+            <td class="text-start px-3">{s.fullname}</td>
+            <td>{s.section_name}</td>
+            <td>
+                {'<span class="badge bg-danger">غائب (' + att_date + ')</span>' if s.fullname in absent_names_on_date else '<span class="badge bg-light text-dark border">حاضر</span>'}
+            </td>
+            <td>
+                <form action="/teacher/mark-absence" method="POST" class="d-inline-flex align-items-center gap-1">
+                    <input type="hidden" name="student_name" value="{s.fullname}">
+                    <input type="hidden" name="section_name" value="{s.section_name}">
+                    <input type="hidden" name="date" value="{att_date}">
+                    <input type="hidden" name="selected_section" value="{selected_section}">
+                    <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" class="form-control form-control-sm text-center fw-bold" style="width: 68px;">
+                    <button type="submit" class="btn btn-outline-danger btn-sm fw-bold">تسجيل غياب</button>
                 </form>
-            </div>
+            </td>
+        </tr>
+        """
+        for idx, s in enumerate(students_sorted, 1)
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-muted small'>اختر قسماً لعرض قائمة المناداة وتسجيل الغيابات.</td></tr>"
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div class="bg-white rounded-2xl shadow-md p-5 space-y-4">
-                    <h3 class="text-md font-bold text-gray-800 border-b pb-2">إدارة أقسامي المسندة</h3>
-                    <form action="/teacher/add-section" method="POST" class="space-y-3">
-                        <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white">
+    my_sections_list_html = "".join([
+        f"""
+        <div class="d-flex justify-content-between align-items-center bg-light px-3 py-2 rounded border small">
+            <span class="fw-bold text-primary">{ts.section_name}</span>
+            <a href="/teacher/remove-section/{ts.id}" class="text-danger text-decoration-none fw-bold">حذف</a>
+        </div>
+        """
+        for ts in assigned_sections
+    ]) or "<p class='text-muted small mb-0'>لم تضف أي قسم بعد.</p>"
+
+    lessons_rows = "".join([
+        f"""
+        <tr class='small'>
+            <td class='fw-bold'>{l.section_name}</td>
+            <td class='text-start'>{l.lesson_title}</td>
+            <td class='fw-bold text-primary'>{format_hours(l.hours)} سا</td>
+            <td>{l.date}</td>
+            <td>
+                {"<span class='badge bg-primary'>مُرسلة للمدير</span>" if l.approved_by == "مرسل للمدير" else "<span class='badge bg-secondary'>محفوظة عند الأستاذ</span>"}
+            </td>
+            <td>
+                {"<span class='text-success fw-bold'>تم الإرسال</span>" if l.approved_by == "مرسل للمدير" else f"<form action='/teacher/send-lesson-to-director/{l.id}' method='POST' class='d-inline'><button type='submit' class='btn btn-primary btn-sm py-0 px-2 fw-bold'>إرسال للمدير</button></form>"}
+            </td>
+        </tr>
+        """
+        for l in reversed(my_lessons)
+    ]) or "<tr><td colspan='6' class='text-center py-4 text-muted small'>لا توجد حصص مسجلة في دفتر النصوص بعد.</td></tr>"
+
+    body = f"""
+    <div class="card p-4 bg-white mb-4">
+        <div class="row g-3 text-center">
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">حجمي الساعي الفعلي</div>
+                    <div class="fw-bold fs-6 text-primary mt-1">{hours_display}</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">ساعات دفتر النصوص</div>
+                    <div class="fw-bold fs-6 text-success mt-1">{format_hours(total_lesson_hours)} سا</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">حصص مرسلة للمدير</div>
+                    <div class="fw-bold fs-6 text-info mt-1">{sent_to_director_count}</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">غيابات مسجلة</div>
+                    <div class="fw-bold fs-6 text-danger mt-1">{len(my_absences)}</div>
+                </div>
+            </div>
+        </div>
+
+        <form action="/teacher/set-hours" method="POST" class="row g-2 align-items-center bg-light p-3 rounded border mt-3">
+            <div class="col-md-7 small fw-bold text-secondary">
+                تحديد/تعديل الحجم الساعي الفعلي الأسبوعي (يظهر للحارس العام والمدير بعد الحفظ):
+            </div>
+            <div class="col-md-3">
+                <input type="number" step="0.5" min="1" max="50" name="weekly_hours" value="{hours_input_val}" placeholder="مثال: 13" required class="form-control form-control-sm text-center fw-bold">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary btn-sm w-100 fw-bold">حفظ الحجم الساعي</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-lg-4">
+            <div class="card p-4 bg-white h-100">
+                <h6 class="fw-bold text-success border-bottom pb-2 mb-3">
+                    <i class="fas fa-chalkboard me-1"></i> إدارة الأقسام المسندة
+                </h6>
+                <form action="/teacher/add-section" method="POST" class="mb-3">
+                    <div class="input-group input-group-sm">
+                        <select name="section_name" required class="form-select">
                             <option value="" disabled selected>-- اختر قسماً لإضافته --</option>
                             {all_sections_options}
                         </select>
-                        <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg text-xs transition">إضافة إلى أقسامي</button>
-                    </form>
-                    <div class="space-y-2 mt-3 max-h-48 overflow-y-auto border-t pt-2">{my_sections_list_html}</div>
-                </div>
-
-                <div class="bg-white rounded-2xl shadow-md p-5 md:col-span-2 space-y-4">
-                    <div class="flex justify-between items-center border-b pb-2">
-                        <h3 class="text-md font-bold text-gray-800">قائمة المناداة وتسجيل الغيابات</h3>
-                        <form method="GET" action="/teacher/dashboard-view" class="flex gap-2">
-                            <input type="hidden" name="archive_section" value="{archive_section_filter}">
-                            <select name="section" onchange="this.form.submit()" class="px-3 py-1.5 rounded-lg border text-xs bg-white font-bold text-blue-800">
-                                <option value="" disabled {"selected" if not selected_section else ""}>-- اختر القسم --</option>
-                                {my_sections_options}
-                            </select>
-                        </form>
-                    </div>
-                    <div class="overflow-x-auto max-h-96">
-                        <table class="w-full text-right">
-                            <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">التلميذ (الاسم واللقب)</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3 text-center">إجراء الغياب</th></tr></thead>
-                            <tbody>{attendance_rows}</tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
-                <div class="flex flex-wrap justify-between items-center border-b pb-2 gap-2">
-                    <h3 class="text-md font-bold text-gray-800">أرشيف الغيابات السنوي (بالاسم واللقب)</h3>
-                    <form method="GET" action="/teacher/dashboard-view" class="flex items-center gap-2">
-                        <input type="hidden" name="section" value="{selected_section}">
-                        <select name="archive_section" onchange="this.form.submit()" class="px-3 py-1.5 rounded-lg border text-xs bg-white font-bold text-slate-700">
-                            <option value="">كل الأقسام المسندة</option>
-                            {archive_filter_options}
-                        </select>
-                    </form>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">الاسم واللقب</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">التاريخ</th><th class="py-2.5 px-3">الساعات</th><th class="py-2.5 px-3">السجل</th></tr></thead>
-                        <tbody>{yearly_archive_rows}</tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
-                <h3 class="text-md font-bold text-gray-800">دفتر النصوص (تسجيل مباشر عند الأستاذ — يُرسل للمدير عند الطلب)</h3>
-                <form action="/teacher/submit-lesson" method="POST" class="grid grid-cols-1 md:grid-cols-5 gap-3">
-                    <div><select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white"><option value="" disabled selected>-- اختر القسم --</option>{my_sections_options}</select></div>
-                    <div><input type="text" name="lesson_title" placeholder="عنوان الدرس..." required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
-                    <div><input type="text" name="content" placeholder="الملخص..." required class="w-full px-3 py-2 rounded-lg border text-xs"></div>
-                    <div><input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" placeholder="عدد الساعات" required class="w-full px-3 py-2 rounded-lg border text-xs font-bold"></div>
-                    <div class="flex gap-2">
-                        <input type="date" name="date" value="{today_date}" required class="w-full px-3 py-2 rounded-lg border text-xs">
-                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2 rounded-lg text-xs whitespace-nowrap">تسجيل الحصة</button>
+                        <button type="submit" class="btn btn-success fw-bold">إضافة قسم</button>
                     </div>
                 </form>
+                <div class="d-flex flex-column gap-2" style="max-height: 200px; overflow-y: auto;">
+                    {my_sections_list_html}
+                </div>
 
-                <div class="overflow-x-auto pt-2">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2 px-3">القسم</th><th class="py-2 px-3">الدرس</th><th class="py-2 px-3">الساعات</th><th class="py-2 px-3">التاريخ</th><th class="py-2 px-3">الحالة</th><th class="py-2 px-3">إرسال للمدير</th></tr></thead>
-                        <tbody>{lessons_rows}</tbody>
+                {% if selected_section %}
+                <hr class="my-3">
+                <h6 class="fw-bold text-primary small mb-2">
+                    <i class="fas fa-user-plus me-1"></i> إضافة تلميذ إلى القسم ({selected_section})
+                </h6>
+                <form action="/teacher/add-student" method="POST">
+                    <input type="hidden" name="section_name" value="{selected_section}">
+                    <div class="input-group input-group-sm">
+                        <input type="text" name="student_fullname" class="form-control" placeholder="الاسم واللقب..." required>
+                        <button type="submit" class="btn btn-primary fw-bold">إضافة</button>
+                    </div>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card p-4 bg-white">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 border-bottom pb-2 mb-3">
+                    <h6 class="fw-bold text-success mb-0">
+                        <i class="fas fa-clipboard-list me-1"></i> الأقسام وقائمة المناداة وتسجيل الغيابات
+                    </h6>
+                    <form method="GET" action="/teacher/dashboard-view" class="d-flex align-items-center gap-2">
+                        <select name="section" onchange="this.form.submit()" class="form-select form-select-sm fw-bold text-primary" style="width: auto;">
+                            <option value="" disabled selected>-- اختر القسم --</option>
+                            {my_sections_options}
+                        </select>
+                        <input type="date" name="att_date" value="{att_date}" onchange="this.form.submit()" class="form-control form-control-sm" style="width: auto;">
+                    </form>
+                </div>
+
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                    {section_tabs_html}
+                </div>
+
+                <div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
+                    <table class="table table-bordered table-sm text-center align-middle small">
+                        <thead class="table-success">
+                            <tr><th style="width: 45px;">#</th><th class="text-start px-3">التلميذ</th><th>القسم</th><th>الحالة</th><th>تسجيل الغياب</th></tr>
+                        </thead>
+                        <tbody>{attendance_rows}</tbody>
                     </table>
                 </div>
             </div>
         </div>
-    </body>
-    </html>
+    </div>
+
+    <div class="card p-4 bg-white mb-4">
+        <h6 class="fw-bold text-primary mb-3">
+            <i class="fas fa-book me-1"></i> دفتر النصوص (تسجيل مباشر عند الأستاذ — يُرسل للمدير عند الطلب)
+        </h6>
+        <form action="/teacher/submit-lesson" method="POST" class="row g-2 mb-3 bg-light p-3 rounded border">
+            <div class="col-md-2">
+                <select name="section_name" required class="form-select form-select-sm">
+                    <option value="" disabled selected>-- القسم --</option>
+                    {my_sections_options}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <input type="text" name="lesson_title" placeholder="عنوان الدرس..." required class="form-control form-control-sm">
+            </div>
+            <div class="col-md-3">
+                <input type="text" name="content" placeholder="الملخص..." required class="form-control form-control-sm">
+            </div>
+            <div class="col-md-2">
+                <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" placeholder="الساعات" required class="form-control form-control-sm text-center fw-bold">
+            </div>
+            <div class="col-md-2 d-flex gap-1">
+                <input type="date" name="date" value="{today_date}" required class="form-control form-control-sm">
+                <button type="submit" class="btn btn-primary btn-sm fw-bold">تسجيل</button>
+            </div>
+        </form>
+
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped text-center align-middle small">
+                <thead class="table-light">
+                    <tr><th>القسم</th><th class="text-start">الدرس</th><th>الساعات</th><th>التاريخ</th><th>الحالة</th><th>إرسال للمدير</th></tr>
+                </thead>
+                <tbody>{lessons_rows}</tbody>
+            </table>
+        </div>
+    </div>
     """
+    return render_aligned("لوحة الأستاذ - الأقسام والغيابات", body, selected_section=selected_section)
 
 
-# ==============================================================================
-# مسارات الحارس العام (قائمة الأقسام + تسجيل غياب الأستاذ + رفع التقرير للمدير)
-# ==============================================================================
+_mod_bind_view("/teacher/dashboard-view", "teacher_dashboard_view", mod_teacher_dashboard_view, methods=["GET"])
 
-@app.route("/counselor/record-teacher-absence", methods=["POST"])
+
 @login_required
-def record_teacher_absence():
+def mod_submit_report_to_director():
     if session.get("role") not in COUNSELOR_ROLES:
         return redirect(url_for("home"))
 
-    _ensure_extra_tables()
-    teacher_uname = (request.form.get("teacher_username") or "").strip().lower()
-    section_name = (request.form.get("section_name") or "").strip()
-    date = (request.form.get("date") or datetime.now().strftime("%Y-%m-%d")).strip()
-    try:
-        hours_val = float(request.form.get("hours") or 1.0)
-        if hours_val <= 0:
-            hours_val = 1.0
-    except ValueError:
-        hours_val = 1.0
-
-    teacher_user = User.query.filter_by(username=teacher_uname).first()
-    teacher_fullname = (
-        teacher_user.fullname
-        if teacher_user
-        else (request.form.get("teacher_name") or "").strip()
-    )
-
-    if teacher_fullname and section_name in OFFICIAL_SECTIONS and date:
-        db.session.execute(
-            text(
-                "INSERT INTO teacher_attendance ("
-                "teacher_username, teacher_name, section_name, date, hours, recorded_by"
-                ") VALUES (:u, :n, :s, :d, :h, :r)"
-            ),
-            {
-                "u": teacher_uname,
-                "n": teacher_fullname,
-                "s": section_name,
-                "d": date,
-                "h": hours_val,
-                "r": session.get("fullname"),
-            },
-        )
-        db.session.commit()
-        flash(
-            f"تم تسجيل غياب الأستاذ ({teacher_fullname}) أمام القسم {section_name} بساعة غياب ({format_hours(hours_val)} سا).",
-            "success",
-        )
-    else:
-        flash("يرجى اختيار الأستاذ والقسم والتاريخ بشكل صحيح.", "danger")
-
-    return redirect(url_for("counselor_dashboard_view"))
-
-
-@app.route("/counselor/submit-report-to-director", methods=["POST"])
-@login_required
-def submit_report_to_director():
-    if session.get("role") not in COUNSELOR_ROLES:
-        return redirect(url_for("home"))
-
-    _ensure_extra_tables()
-    student_absences = Attendance.query.all()
-    student_absence_count = len(student_absences)
-    student_absence_hours = sum(float(a.hours or 1.0) for a in student_absences)
-
-    t_rows = _get_teacher_absences_rows()
-    teacher_absence_count = len(t_rows)
-    teacher_absence_hours = sum(float(r["hours"] or 0.0) for r in t_rows)
-
-    counselor_members = User.query.filter(User.role.in_(COUNSELOR_ROLES)).all()
-    counselor_members_count = len(counselor_members)
-
+    _mod_ensure_report_table()
+    stats = _mod_build_counselor_report_data()
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     summary_text = (
         f"تقرير شامل بتاريخ {now_str}: "
-        f"غيابات التلاميذ ({student_absence_count} حالة / {format_hours(student_absence_hours)} سا)، "
-        f"غيابات الأساتذة ({teacher_absence_count} حالة / {format_hours(teacher_absence_hours)} سا)، "
-        f"أعضاء الاستشارة ({counselor_members_count} عضو)."
+        f"غيابات التلاميذ ({stats['student_absence_count']} حالة / {format_hours(stats['student_absence_hours'])} سا)، "
+        f"غيابات الأساتذة ({stats['teacher_absence_count']} حالة / {format_hours(stats['teacher_absence_hours'])} سا)، "
+        f"أعضاء الاستشارة ({stats['counselor_members_count']} عضو)."
     )
 
     db.session.execute(
@@ -1622,251 +1631,144 @@ def submit_report_to_director():
             "total_teacher_absences, total_teacher_absent_hours, "
             "counselor_members_count, report_summary, sent_to_director"
             ") VALUES ("
-            ":u, :n, :dt, :sa, :sah, :ta, :tah, :cm, :sm, TRUE"
+            ":u, :n, :dt, :sa, :sah, :ta, :tah, :cm, :sm, 1"
             ")"
         ),
         {
             "u": session.get("username"),
             "n": session.get("fullname"),
             "dt": now_str,
-            "sa": student_absence_count,
-            "sah": student_absence_hours,
-            "ta": teacher_absence_count,
-            "tah": teacher_absence_hours,
-            "cm": counselor_members_count,
+            "sa": stats["student_absence_count"],
+            "sah": stats["student_absence_hours"],
+            "ta": stats["teacher_absence_count"],
+            "tah": stats["teacher_absence_hours"],
+            "cm": stats["counselor_members_count"],
             "sm": summary_text,
         },
     )
     db.session.commit()
-    flash(
-        "تم رفع تقرير الغيابات الشامل (التلاميذ، الأساتذة، وأعضاء الاستشارة) إلى السيد المدير.",
-        "success",
-    )
+    flash("تم رفع تقرير الغيابات الشامل إلى السيد المدير.", "success")
     return redirect(url_for("counselor_dashboard_view"))
 
 
-@app.route("/counselor/dashboard-view")
+_mod_bind_view("/counselor/submit-report-to-director", "mod_submit_report_to_director", mod_submit_report_to_director, methods=["POST"])
+
+
 @login_required
-def counselor_dashboard_view():
+def mod_counselor_dashboard_view():
     if session.get("role") not in COUNSELOR_ROLES:
         return redirect(url_for("home"))
 
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    student_absences = Attendance.query.order_by(Attendance.id.desc()).all()
-    t_rows = _get_teacher_absences_rows()
-    counselor_members = User.query.filter(User.role.in_(COUNSELOR_ROLES)).all()
-    all_teachers = User.query.filter_by(role="teacher").all()
+    attendances = Attendance.query.all()
+    stats = _mod_build_counselor_report_data()
     declared_teachers = get_declared_teachers()
 
-    student_absence_count = len(student_absences)
-    student_absence_hours = sum(float(a.hours or 1.0) for a in student_absences)
-    teacher_absence_count = len(t_rows)
-    teacher_absence_hours = sum(float(r["hours"] or 0.0) for r in t_rows)
-
-    flashes_html = "".join([
-        f"<div class='p-3 rounded-lg text-xs font-bold text-center border {'bg-emerald-50 text-emerald-700 border-emerald-200' if cat == 'success' else 'bg-red-50 text-red-700 border-red-200'}'>{msg}</div>"
-        for cat, msg in get_flashed_messages(with_categories=True)
-    ])
-
-    teacher_select_options = "".join([
-        f'<option value="{t.username}">{t.fullname}</option>'
-        for t in all_teachers
-    ]) or '<option value="teacher">الأستاذ فغلو عبد الله</option>'
-
-    section_select_options = "".join([
-        f'<option value="{sec}">{sec}</option>'
-        for sec in OFFICIAL_SECTIONS
-    ])
-
     counselor_members_html = "".join([
-        f"<span class='bg-amber-50 text-amber-900 border border-amber-200 px-3 py-1 rounded-lg text-xs font-bold'>{m.fullname}</span>"
-        for m in counselor_members
-    ]) or "<span class='text-xs text-gray-400'>لا يوجد أعضاء استشارة مسجلون حالياً.</span>"
+        f'<span class="badge bg-warning text-dark p-2">{m.fullname}</span>'
+        for m in stats["counselor_members"]
+    ]) or '<span class="text-muted small">لا يوجد أعضاء استشارة مسجلون حالياً.</span>'
 
     declared_teachers_cards = "".join([
-        f"<div class='bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs flex justify-between items-center gap-3'><span class='font-bold text-slate-800'>{t.fullname}</span><span class='bg-blue-100 text-blue-900 font-extrabold px-2.5 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span></div>"
+        f"""
+        <div class="col-md-4">
+            <div class="p-2.5 bg-light rounded border d-flex justify-content-between align-items-center small">
+                <span class="fw-bold">{t.fullname}</span>
+                <span class="badge bg-primary">{format_hours(t.weekly_hours)} سا/أسبوع</span>
+            </div>
+        </div>
+        """
         for t in declared_teachers
-    ]) or "<p class='text-xs text-slate-400'>لم يحدد أي أستاذ حجمه الساعي بعد.</p>"
+    ]) or '<p class="text-muted small mb-0">لم يحدد أي أستاذ حجمه الساعي بعد.</p>'
 
-    sections_overview_rows = []
-    for sec in OFFICIAL_SECTIONS:
-        sec_students = [a for a in student_absences if a.section_name == sec]
-        sec_teachers = [r for r in t_rows if r["section_name"] == sec]
+    att_rows = "".join([
+        f"""
+        <tr class='small'>
+            <td class='fw-bold'>{a.student_name}</td>
+            <td><span class='badge bg-secondary'>{a.section_name}</span></td>
+            <td>{a.teacher_name}</td>
+            <td>{a.date}</td>
+            <td class='fw-bold text-danger'>{format_hours(a.hours)} سا</td>
+        </tr>
+        """
+        for a in reversed(attendances)
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-muted small'>لا توجد غيابات مسجلة بعد.</td></tr>"
 
-        items_html = []
-        for tr in sec_teachers:
-            items_html.append(
-                f"<div class='text-orange-900 bg-orange-50 border border-orange-200 rounded px-2.5 py-1 mb-1 font-bold'>"
-                f"غياب الأستاذ: {tr['teacher_name']} — ساعة الغياب: {format_hours(tr['hours'])} سا ({tr['date']})"
-                f"</div>"
-            )
-        for st in sec_students:
-            items_html.append(
-                f"<div class='text-rose-900 bg-rose-50 border border-rose-200 rounded px-2.5 py-1 mb-1'>"
-                f"التلميذ: <span class='font-bold'>{st.student_name}</span> — {st.date} — ({format_hours(st.hours)} سا)"
-                f"</div>"
-            )
+    body = f"""
+    <div class="card p-4 bg-white mb-4 border-end border-4 border-warning">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <div>
+                <h5 class="fw-bold text-dark mb-1"><i class="fas fa-user-shield text-warning me-1"></i> مكتب الاستشارة التربوية - الحارس العام</h5>
+                <div class="small text-muted">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</div>
+            </div>
+            <form action="/counselor/submit-report-to-director" method="POST" class="d-inline">
+                <button type="submit" class="btn btn-success btn-sm fw-bold">
+                    <i class="fas fa-paper-plane me-1"></i> رفع تقرير الغيابات للمدير
+                </button>
+            </form>
+        </div>
 
-        if items_html:
-            detail_cell = "".join(items_html)
-        else:
-            detail_cell = "<span class='text-slate-500 font-bold bg-slate-100 px-2.5 py-1 rounded'>لا توجد غيابات مسجلة</span>"
-
-        sections_overview_rows.append(
-            f"<tr class='border-b text-xs align-top'>"
-            f"<td class='py-2.5 px-3 font-extrabold text-blue-900 whitespace-nowrap'>{sec}</td>"
-            f"<td class='py-2.5 px-3'>{detail_cell}</td>"
-            f"</tr>"
-        )
-
-    sections_rows_html = "".join(sections_overview_rows)
-
-    return f"""
-    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
-    <body class="bg-slate-100 min-h-screen p-6">
-        <div class="max-w-6xl mx-auto space-y-6">
-            {f"<div class='space-y-2'>{flashes_html}</div>" if flashes_html else ""}
-
-            <div class="bg-white rounded-2xl shadow-md p-6 border-r-8 border-amber-600 space-y-4">
-                <div class="flex flex-wrap justify-between items-center gap-2">
-                    <div>
-                        <h1 class="text-xl font-bold text-gray-800">مكتب الاستشارة التربوية - الحارس العام</h1>
-                        <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <form action="/counselor/submit-report-to-director" method="POST" class="inline">
-                            <button type="submit" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs font-bold shadow">رفع تقرير الغيابات للمدير</button>
-                        </form>
-                        <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-rose-700">غيابات التلاميذ (حالات / ساعات)</div>
-                        <div class="text-base font-extrabold text-rose-950 mt-1">{student_absence_count} / {format_hours(student_absence_hours)} سا</div>
-                    </div>
-                    <div class="bg-orange-50 border border-orange-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-orange-800">غيابات الأساتذة (حالات / ساعات)</div>
-                        <div class="text-base font-extrabold text-orange-950 mt-1">{teacher_absence_count} / {format_hours(teacher_absence_hours)} سا</div>
-                    </div>
-                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-amber-800">عدد أعضاء الاستشارة</div>
-                        <div class="text-base font-extrabold text-amber-950 mt-1">{len(counselor_members)}</div>
-                    </div>
-                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-blue-700">أساتذة حددوا حجمهم الساعي</div>
-                        <div class="text-base font-extrabold text-blue-950 mt-1">{len(declared_teachers)}</div>
-                    </div>
-                </div>
-
-                <div class="border-t pt-3 space-y-2">
-                    <div class="text-xs font-bold text-slate-700">أعضاء الاستشارة التربوية:</div>
-                    <div class="flex flex-wrap gap-2">{counselor_members_html}</div>
-                </div>
-
-                <div class="border-t pt-3 space-y-2">
-                    <div class="text-xs font-bold text-slate-700">الساعات الفعلية للأساتذة:</div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">{declared_teachers_cards}</div>
+        <div class="row g-3 text-center mb-3">
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">غيابات التلاميذ</div>
+                    <div class="fw-bold fs-6 text-danger mt-1">{stats['student_absence_count']} / {format_hours(stats['student_absence_hours'])} سا</div>
                 </div>
             </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6 space-y-4">
-                <h2 class="text-md font-bold text-gray-800 border-b pb-2">تسجيل غياب أستاذ وتحديده أمام القسم</h2>
-                <form action="/counselor/record-teacher-absence" method="POST" class="grid grid-cols-1 md:grid-cols-5 gap-3">
-                    <div>
-                        <label class="block text-[11px] font-bold text-gray-600 mb-1">الأستاذ (الاسم واللقب)</label>
-                        <select name="teacher_username" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white font-bold">
-                            <option value="" disabled selected>-- اختر الأستاذ --</option>
-                            {teacher_select_options}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-[11px] font-bold text-gray-600 mb-1">القسم</label>
-                        <select name="section_name" required class="w-full px-3 py-2 rounded-lg border text-xs bg-white font-bold">
-                            <option value="" disabled selected>-- اختر القسم --</option>
-                            {section_select_options}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-[11px] font-bold text-gray-600 mb-1">ساعة الغياب</label>
-                        <input type="number" step="0.5" min="0.5" max="12" name="hours" value="1" required class="w-full px-3 py-2 rounded-lg border text-xs font-bold text-center">
-                    </div>
-                    <div>
-                        <label class="block text-[11px] font-bold text-gray-600 mb-1">التاريخ</label>
-                        <input type="date" name="date" value="{today_date}" required class="w-full px-3 py-2 rounded-lg border text-xs">
-                    </div>
-                    <div class="flex items-end">
-                        <button type="submit" class="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-lg text-xs transition">تسجيل غياب الأستاذ</button>
-                    </div>
-                </form>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">غيابات الأساتذة</div>
+                    <div class="fw-bold fs-6 text-warning mt-1">{stats['teacher_absence_count']} / {format_hours(stats['teacher_absence_hours'])} سا</div>
+                </div>
             </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">قائمة الأقسام وغياباتها (تلاميذ وأساتذة)</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3 w-36">القسم</th><th class="py-2.5 px-3">الغيابات المسجلة</th></tr></thead>
-                        <tbody>{sections_rows_html}</tbody>
-                    </table>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">أعضاء الاستشارة</div>
+                    <div class="fw-bold fs-6 text-dark mt-1">{stats['counselor_members_count']}</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">أساتذة حددوا الحجم الساعي</div>
+                    <div class="fw-bold fs-6 text-primary mt-1">{len(declared_teachers)}</div>
                 </div>
             </div>
         </div>
-    </body></html>
-    """
 
-
-# ==============================================================================
-# لوحة السيد الناظر
-# ==============================================================================
-
-@app.route("/deputy/dashboard-view")
-@login_required
-def deputy_dashboard_view():
-    if session.get("role") != "inspector_deputy":
-        return redirect(url_for("home"))
-    approved_logs = LessonLog.query.filter_by(approval_status="approved").all()
-    total_hrs = sum(float(l.hours or 0) for l in approved_logs)
-    rows = "".join([
-        f"<tr class='border-b text-xs'><td class='py-3 px-4'>{l.teacher_name}</td><td class='py-3 px-4'>{l.section_name}</td><td class='py-3 px-4 font-bold'>{l.lesson_title}</td><td class='py-3 px-4'>{l.content}</td><td class='py-3 px-4 font-bold'>{format_hours(l.hours)} سا</td><td class='py-3 px-4'>{l.date}</td></tr>"
-        for l in approved_logs
-    ]) or "<tr><td colspan='6' class='text-center py-4 text-gray-400'>لا توجد دروس معتمدة بعد.</td></tr>"
-    return f"""
-    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
-    <body class="bg-slate-100 min-h-screen p-6">
-        <div class="max-w-5xl mx-auto space-y-6">
-            <div class="bg-white rounded-2xl shadow-md p-6 flex justify-between items-center border-r-8 border-indigo-600">
-                <div>
-                    <h1 class="text-xl font-bold text-gray-800">التنسيق البيداغوجي - السيد الناظر</h1>
-                    <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد | إجمالي الساعات المعتمدة: {format_hours(total_hrs)} سا</p>
-                </div>
-                <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
-            </div>
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">متابعة دفاتر النصوص المعتمدة</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-3 px-4">الأستاذ</th><th class="py-3 px-4">القسم</th><th class="py-3 px-4">الدرس</th><th class="py-3 px-4">المحتوى</th><th class="py-3 px-4">الساعات</th><th class="py-3 px-4">التاريخ</th></tr></thead>
-                        <tbody>{rows}</tbody>
-                    </table>
-                </div>
-            </div>
+        <div class="border-top pt-3 mb-3">
+            <div class="small fw-bold text-secondary mb-2">أعضاء الاستشارة التربوية:</div>
+            <div class="d-flex flex-wrap gap-2">{counselor_members_html}</div>
         </div>
-    </body></html>
+
+        <div class="border-top pt-3">
+            <div class="small fw-bold text-secondary mb-2">الحجم الساعي الفعلي للأساتذة:</div>
+            <div class="row g-2">{declared_teachers_cards}</div>
+        </div>
+    </div>
+
+    <div class="card p-4 bg-white">
+        <h6 class="fw-bold text-dark mb-3"><i class="fas fa-table me-1"></i> سجل غيابات التلاميذ والأقسام الواردة تلقائياً</h6>
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped text-center align-middle small">
+                <thead class="table-success">
+                    <tr><th>التلميذ</th><th>القسم</th><th>الأستاذ</th><th>التاريخ</th><th>الساعات</th></tr>
+                </thead>
+                <tbody>{att_rows}</tbody>
+            </table>
+        </div>
+    </div>
     """
+    return render_aligned("مكتب الاستشارة التربوية", body)
 
 
-# ==============================================================================
-# لوحة السيد المدير (عرض الحصص المرسلة له + تقارير الحارس العام المرفوعة)
-# ==============================================================================
+_mod_bind_view("/counselor/dashboard-view", "counselor_dashboard_view", mod_counselor_dashboard_view, methods=["GET"])
 
-@app.route("/director/dashboard-view")
+
 @login_required
-def director_dashboard_view():
+def mod_director_dashboard_view():
     if session.get("role") not in DIRECTOR_ROLES:
         return redirect(url_for("home"))
 
-    _ensure_extra_tables()
+    _mod_ensure_report_table()
     sent_lessons = LessonLog.query.filter_by(approved_by="مرسل للمدير").all()
     declared_teachers = get_declared_teachers()
     reports = db.session.execute(
@@ -1892,81 +1794,106 @@ def director_dashboard_view():
     latest_counselor_cnt = f"{latest_report[7]}" if latest_report else "0"
 
     declared_teachers_html = "".join([
-        f"<div class='bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs flex justify-between items-center'><span class='font-bold text-slate-800'>{t.fullname}</span><span class='bg-blue-100 text-blue-900 font-extrabold px-3 py-1 rounded-lg'>{format_hours(t.weekly_hours)} سا/أسبوع</span></div>"
+        f"""
+        <div class="col-md-4">
+            <div class="p-2.5 bg-light rounded border d-flex justify-content-between align-items-center small">
+                <span class="fw-bold">{t.fullname}</span>
+                <span class="badge bg-primary">{format_hours(t.weekly_hours)} سا/أسبوع</span>
+            </div>
+        </div>
+        """
         for t in declared_teachers
-    ]) or "<p class='text-xs text-slate-400'>لا توجد حجوم ساعية محددة من طرف الأساتذة بعد.</p>"
+    ]) or '<p class="text-muted small mb-0">لا توجد حجوم ساعية محددة من طرف الأساتذة بعد.</p>'
 
     sent_lessons_rows = "".join([
-        f"<tr class='border-b text-xs'><td class='py-2.5 px-3'>{l.teacher_name}</td><td class='py-2.5 px-3'>{l.section_name}</td><td class='py-2.5 px-3 font-bold'>{l.lesson_title}</td><td class='py-2.5 px-3 font-bold'>{format_hours(l.hours)} سا</td><td class='py-2.5 px-3'>{l.date}</td></tr>"
+        f"""
+        <tr class='small'>
+            <td>{l.teacher_name}</td>
+            <td><span class='badge bg-secondary'>{l.section_name}</span></td>
+            <td class='fw-bold text-start'>{l.lesson_title}</td>
+            <td class='fw-bold text-primary'>{format_hours(l.hours)} سا</td>
+            <td>{l.date}</td>
+        </tr>
+        """
         for l in reversed(sent_lessons)
-    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لم يرسل أي أستاذ حصصاً للمدير بعد.</td></tr>"
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-muted small'>لم يرسل أي أستاذ حصصاً للمدير بعد.</td></tr>"
 
     reports_rows = "".join([
-        f"<tr class='border-b text-xs'><td class='py-2.5 px-3 font-bold'>{r[1] or '-'}</td><td class='py-2.5 px-3'>{r[2] or '-'}</td><td class='py-2.5 px-3'>{r[3]} ({format_hours(r[4])} سا)</td><td class='py-2.5 px-3'>{r[5]} ({format_hours(r[6])} سا)</td><td class='py-2.5 px-3 font-bold'>{r[7]}</td></tr>"
+        f"""
+        <tr class='small'>
+            <td class='fw-bold'>{r[1] or '-'}</td>
+            <td>{r[2] or '-'}</td>
+            <td>{r[3]} ({format_hours(r[4])} سا)</td>
+            <td>{r[5]} ({format_hours(r[6])} سا)</td>
+            <td class='fw-bold'>{r[7]}</td>
+        </tr>
+        """
         for r in reports
-    ]) or "<tr><td colspan='5' class='text-center py-4 text-gray-400 text-xs'>لا توجد تقارير مرفوعة من الحارس العام بعد.</td></tr>"
+    ]) or "<tr><td colspan='5' class='text-center py-4 text-muted small'>لا توجد تقارير مرفوعة من الحارس العام بعد.</td></tr>"
 
-    return f"""
-    <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet"><style>body{{font-family:'Cairo',sans-serif;}}</style></head>
-    <body class="bg-slate-100 min-h-screen p-6">
-        <div class="max-w-6xl mx-auto space-y-6">
-            <div class="bg-white rounded-2xl shadow-md p-6 border-r-8 border-blue-800 space-y-4">
-                <div class="flex flex-wrap justify-between items-center gap-2">
-                    <div>
-                        <h1 class="text-xl font-bold text-gray-800">لوحة القيادة الشاملة - السيد المدير</h1>
-                        <p class="text-xs text-gray-500 mt-1">ثانوية الشهيد قوديد أحمد ـ سيدي الشحمي</p>
-                    </div>
-                    <a href="/logout" class="bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-semibold">تسجيل الخروج</a>
-                </div>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    <div class="bg-rose-50 border border-rose-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-rose-700">غيابات التلاميذ (آخر تقرير مرفوع)</div>
-                        <div class="text-base font-extrabold text-rose-950 mt-1">{latest_student_abs}</div>
-                    </div>
-                    <div class="bg-orange-50 border border-orange-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-orange-800">غيابات الأساتذة (آخر تقرير مرفوع)</div>
-                        <div class="text-base font-extrabold text-orange-950 mt-1">{latest_teacher_abs}</div>
-                    </div>
-                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-amber-800">أعضاء الاستشارة (آخر تقرير مرفوع)</div>
-                        <div class="text-base font-extrabold text-amber-950 mt-1">{latest_counselor_cnt}</div>
-                    </div>
-                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-3.5">
-                        <div class="text-[11px] font-bold text-blue-700">أساتذة حددوا حجمهم الساعي</div>
-                        <div class="text-base font-extrabold text-blue-950 mt-1">{len(declared_teachers)}</div>
-                    </div>
-                </div>
-
-                <div class="border-t pt-3 space-y-2">
-                    <div class="text-xs font-bold text-slate-700">الساعات الفعلية للأساتذة:</div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">{declared_teachers_html}</div>
+    body = f"""
+    <div class="card p-4 bg-white mb-4 border-end border-4 border-primary">
+        <h5 class="fw-bold text-primary mb-3"><i class="fas fa-tachometer-alt me-1"></i> لوحة القيادة الشاملة - السيد المدير</h5>
+        <div class="row g-3 text-center mb-3">
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">غيابات التلاميذ</div>
+                    <div class="fw-bold fs-6 text-danger mt-1">{latest_student_abs}</div>
                 </div>
             </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">تقارير الغيابات المرفوعة من الحارس العام (التلاميذ، الأساتذة، وأعضاء الاستشارة)</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">الحارس العام</th><th class="py-2.5 px-3">تاريخ الرفع</th><th class="py-2.5 px-3">غيابات التلاميذ</th><th class="py-2.5 px-3">غيابات الأساتذة</th><th class="py-2.5 px-3">أعضاء الاستشارة</th></tr></thead>
-                        <tbody>{reports_rows}</tbody>
-                    </table>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">غيابات الأساتذة</div>
+                    <div class="fw-bold fs-6 text-warning mt-1">{latest_teacher_abs}</div>
                 </div>
             </div>
-
-            <div class="bg-white rounded-2xl shadow-md p-6">
-                <h2 class="text-md font-bold text-gray-800 mb-4">حصص دفتر النصوص المرسلة للمدير فقط</h2>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-right">
-                        <thead><tr class="bg-gray-50 border-b text-xs font-bold text-gray-500"><th class="py-2.5 px-3">الأستاذ</th><th class="py-2.5 px-3">القسم</th><th class="py-2.5 px-3">الدرس</th><th class="py-2.5 px-3">الساعات</th><th class="py-2.5 px-3">التاريخ</th></tr></thead>
-                        <tbody>{sent_lessons_rows}</tbody>
-                    </table>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">أعضاء الاستشارة</div>
+                    <div class="fw-bold fs-6 text-dark mt-1">{latest_counselor_cnt}</div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="p-3 bg-light rounded border">
+                    <div class="small text-muted fw-bold">أساتذة حددوا الحجم الساعي</div>
+                    <div class="fw-bold fs-6 text-primary mt-1">{len(declared_teachers)}</div>
                 </div>
             </div>
         </div>
-    </body></html>
-    """
+        <div class="border-top pt-3">
+            <div class="small fw-bold text-secondary mb-2">الحجم الساعي الفعلي للأساتذة:</div>
+            <div class="row g-2">{declared_teachers_html}</div>
+        </div>
+    </div>
 
+    <div class="card p-4 bg-white mb-4">
+        <h6 class="fw-bold text-dark mb-3">تقارير الغيابات المرفوعة من الحارس العام</h6>
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped text-center align-middle small">
+                <thead class="table-primary">
+                    <tr><th>الحارس العام</th><th>تاريخ الرفع</th><th>غيابات التلاميذ</th><th>غيابات الأساتذة</th><th>أعضاء الاستشارة</th></tr>
+                </thead>
+                <tbody>{reports_rows}</tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card p-4 bg-white">
+        <h6 class="fw-bold text-dark mb-3">حصص دفتر النصوص المرسلة للمدير</h6>
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped text-center align-middle small">
+                <thead class="table-success">
+                    <tr><th>الأستاذ</th><th>القسم</th><th class="text-start">الدرس</th><th>الساعات</th><th>التاريخ</th></tr>
+                </thead>
+                <tbody>{sent_lessons_rows}</tbody>
+            </table>
+        </div>
+    </div>
+    """
+    return render_aligned("لوحة القيادة - المدير", body)
+
+
+_mod_bind_view("/director/dashboard-view", "director_dashboard_view", mod_director_dashboard_view, methods=["GET"])
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
